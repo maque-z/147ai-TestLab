@@ -1,0 +1,26 @@
+:root {
+  --bg:           #E8EDF2;
+  --shadow-dark:  #c8cdd4;
+  --shadow-light: #ffffff;
+  --accent:       #6C9BD1;
+  --accent-hover: #5a89bf;
+  --text-primary: #3a4a5c;
+  --text-muted:   #8a9ab0;
+  --radius-card:  16px;
+  --radius-input: 10px;
+  --sidebar-w:    220px;
+}
+
+.nm-raised {
+  box-shadow: 6px 6px 12px var(--shadow-dark), -6px -6px 12px var(--shadow-light);
+}
+.nm-inset {
+  box-shadow: inset 4px 4px 8px var(--shadow-dark), inset -4px -4px 8px var(--shadow-light);
+}
+.nm-btn {
+  box-shadow: 4px 4px 8px var(--shadow-dark), -4px -4px 8px var(--shadow-light);
+  transition: box-shadow 0.15s ease;
+}
+.nm-btn:active {
+  box-shadow: inset 3px 3px 6px var(--shadow-dark), inset -3px -3px 6px var(--shadow-light);
+}

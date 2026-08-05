@@ -1,0 +1,155 @@
+<template>
+  <div class="login-wrapper">
+    <div class="login-card nm-raised">
+      <h1 class="title">147ai TestLab</h1>
+      <p class="subtitle text-muted">登录或注册</p>
+
+      <n-form ref="formRef" :model="form" :rules="rules" class="login-form">
+        <n-form-item path="username" :show-label="false">
+          <n-input
+            v-model:value="form.username"
+            placeholder="用户名"
+            size="large"
+            class="nm-inset"
+            @keyup.enter="handleLogin"
+          />
+        </n-form-item>
+        <n-form-item path="password" :show-label="false">
+          <n-input
+            v-model:value="form.password"
+            type="password"
+            placeholder="密码"
+            size="large"
+            class="nm-inset"
+            @keyup.enter="handleLogin"
+          />
+        </n-form-item>
+        <div class="button-group">
+          <button class="nm-btn login-btn" @click="handleLogin" :disabled="loading">
+            {{ loading ? '登录中...' : '登录' }}
+          </button>
+          <button class="nm-btn register-btn" @click="handleRegister" :disabled="loading">
+            注册
+          </button>
+        </div>
+      </n-form>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+import { NForm, NFormItem, NInput, useMessage } from 'naive-ui'
+
+const router = useRouter()
+const auth = useAuthStore()
+const message = useMessage()
+
+const form = ref({ username: '', password: '' })
+const loading = ref(false)
+const formRef = ref()
+
+const rules = {
+  username: { required: true, message: '请输入用户名', trigger: 'blur' },
+  password: { required: true, message: '请输入密码', trigger: 'blur' }
+}
+
+async function handleLogin() {
+  loading.value = true
+  try {
+    await auth.login(form.value.username, form.value.password)
+    router.push('/')
+  } catch (e: any) {
+    message.error(e?.response?.data?.detail || '登录失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+async function handleRegister() {
+  loading.value = true
+  try {
+    await auth.register(form.value.username, form.value.password)
+    message.success('注册成功，已自动登录')
+    router.push('/')
+  } catch (e: any) {
+    message.error(e?.response?.data?.detail || '注册失败')
+  } finally {
+    loading.value = false
+  }
+}
+</script>
+
+<style scoped>
+.login-wrapper {
+  min-height: 100vh;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-card {
+  background: var(--bg);
+  border-radius: var(--radius-card);
+  padding: 48px 40px;
+  width: 380px;
+  max-width: 90vw;
+}
+
+.title {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-align: center;
+  margin-bottom: 6px;
+  letter-spacing: 0.5px;
+}
+
+.subtitle {
+  text-align: center;
+  margin-bottom: 32px;
+  font-size: 13px;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.login-form :deep(.n-input) {
+  background: var(--bg) !important;
+  border: none !important;
+}
+
+.button-group {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.login-btn, .register-btn {
+  flex: 1;
+  height: 42px;
+  border: none;
+  border-radius: var(--radius-input);
+  background: var(--bg);
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  transition: all 0.15s ease;
+}
+
+.login-btn {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 4px 4px 8px var(--shadow-dark), -2px -2px 6px var(--shadow-light);
+}
+
+.login-btn:hover { background: var(--accent-hover); }
+.login-btn:disabled, .register-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+</style>

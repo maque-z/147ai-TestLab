@@ -1,0 +1,24 @@
+services:
+  fastapi:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=sqlite:////app/data/lab.db
+      - SECRET_KEY=${SECRET_KEY}
+    volumes:
+      - db-data:/app/data
+    expose: ["8000"]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./frontend/dist:/srv:ro
+      - caddy-data:/data
+    depends_on: [fastapi]
+
+volumes:
+  db-data:
+  caddy-data:

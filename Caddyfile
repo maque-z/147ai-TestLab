@@ -1,0 +1,5 @@
+yourdomain.com {
+    handle /api/* { reverse_proxy fastapi:8000 }
+    handle { root * /srv; try_files {path} /index.html; file_server }
+    encode gzip
+}
