@@ -1,24 +1,31 @@
+# 生产环境 (宝塔部署): 只启动 FastAPI
+# 宝塔 Nginx 负责: HTTPS证书、前端静态文件、/api/ 反向代理
+#
+# 宝塔操作步骤:
+#   1. 克隆项目到服务器，cd frontend && npm i && npm run build
+#   2. docker-compose up -d --build
+#   3. 宝塔 → 网站 → 添加站点 → 根目录指向 frontend/dist
+#   4. 网站设置 → 反向代理 → 添加:
+#      代理名称: api  目标URL: http://127.0.0.1:8000  发送域名: $host
+#      代理目录: /api/
+#   5. 宝塔申请 SSL 证书
+
 services:
   fastapi:
     build: ./backend
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"   # 只绑定 localhost，不直接对外暴露
     environment:
       - DATABASE_URL=sqlite:////app/data/lab.db
       - SECRET_KEY=${SECRET_KEY}
     volumes:
       - db-data:/app/data
-    expose: ["8000"]
-
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports: ["80:80", "443:443"]
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./frontend/dist:/srv:ro
-      - caddy-data:/data
-    depends_on: [fastapi]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 volumes:
   db-data:
-  caddy-data:
