@@ -18,16 +18,8 @@ class UserImageConfig(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, nullable=False, index=True)
     # API connection
-    baseurl = Column(String(500), default="https://api.openai.com/v1")
+    baseurl = Column(String(500), default="https://api.openai.com")
     api_key = Column(String(500), default="")
     model_id = Column(String(100), default="gpt-image-alpha")
-    timeout = Column(Integer, default=120)
-    # Generation defaults
-    size = Column(String(20), default="1024x1024")
-    quality = Column(String(20), default="auto")
-    n = Column(Integer, default=1)
-    output_format = Column(String(10), default="png")
-    output_compression = Column(Integer, default=90)
-    background = Column(String(20), default="auto")
-    moderation = Column(String(10), default="auto")
+    timeout = Column(Integer, default=400)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
