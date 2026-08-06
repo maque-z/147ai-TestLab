@@ -5,7 +5,13 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true,
-    "strict": true
+    "strict": true,
+    // composite requires emit and cannot use noEmit, so send the output to a
+    // temp dir instead of letting it land next to the source. Vite resolves
+    // .js before .ts, so a stale emitted vite.config.js would silently shadow
+    // the real vite.config.ts.
+    "outDir": "node_modules/.tmp/tsconfig-node",
+    "tsBuildInfoFile": "node_modules/.tmp/tsconfig-node/.tsbuildinfo"
   },
   "include": ["vite.config.ts"]
 }
