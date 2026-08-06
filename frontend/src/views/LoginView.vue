@@ -1,6 +1,6 @@
 <template>
   <div class="login-wrapper">
-    <div class="login-card nm-raised">
+    <div ref="cardEl" class="login-card nm-raised">
       <h1 class="title">147ai TestLab</h1>
       <p class="subtitle text-muted">登录或注册</p>
 
@@ -38,10 +38,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { NForm, NFormItem, NInput, useMessage } from 'naive-ui'
+import { fadeInUp, nudge } from '@/utils/motion'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -50,6 +51,9 @@ const message = useMessage()
 const form = ref({ username: '', password: '' })
 const loading = ref(false)
 const formRef = ref()
+const cardEl = ref<HTMLElement | null>(null)
+
+onMounted(() => fadeInUp(cardEl.value, { distance: 16 }))
 
 const rules = {
   username: { required: true, message: '请输入用户名', trigger: 'blur' },
@@ -62,6 +66,8 @@ async function handleLogin() {
     await auth.login(form.value.username, form.value.password)
     router.push('/')
   } catch (e: any) {
+    // Shake the card so a failure registers even if the toast is missed.
+    nudge(cardEl.value)
     message.error(e?.response?.data?.detail || '登录失败')
   } finally {
     loading.value = false
@@ -75,6 +81,7 @@ async function handleRegister() {
     message.success('注册成功，已自动登录')
     router.push('/')
   } catch (e: any) {
+    nudge(cardEl.value)
     message.error(e?.response?.data?.detail || '注册失败')
   } finally {
     loading.value = false

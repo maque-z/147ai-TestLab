@@ -2,12 +2,12 @@
   <aside class="sidebar nm-raised" :class="{ collapsed }">
     <div class="sidebar-header">
       <span v-if="!collapsed" class="brand">147ai</span>
-      <button class="toggle-btn nm-btn" @click="$emit('toggle')">
+      <button class="toggle-btn nm-btn" @click="onToggle">
         {{ collapsed ? '›' : '‹' }}
       </button>
     </div>
 
-    <nav class="nav-list">
+    <nav ref="navEl" class="nav-list">
       <router-link
         v-for="item in navItems"
         :key="item.to"
@@ -19,16 +19,55 @@
         <span v-if="!collapsed" class="nav-label">{{ item.label }}</span>
       </router-link>
     </nav>
+
+    <!-- Account lives at the foot of the rail: present, but out of the way of
+         the工作区 up top. -->
+    <div ref="footerEl" class="sidebar-footer">
+      <div class="account" :class="{ mini: collapsed }" :title="username">
+        <span class="avatar">{{ initial }}</span>
+        <span v-if="!collapsed" class="account-name">{{ username }}</span>
+      </div>
+      <button
+        class="logout-btn"
+        :class="{ mini: collapsed }"
+        :title="collapsed ? '退出登录' : undefined"
+        @click="$emit('logout')"
+      >
+        <span class="logout-icon">⏻</span>
+        <span v-if="!collapsed">退出</span>
+      </button>
+    </div>
   </aside>
 </template>
 
 <script setup lang="ts">
-defineProps<{ collapsed: boolean }>()
-defineEmits<{ toggle: [] }>()
+import { computed, onMounted, ref } from 'vue'
+import { fadeInUp, pulse } from '@/utils/motion'
+
+const props = defineProps<{ collapsed: boolean; username?: string }>()
+const emit = defineEmits<{ toggle: []; logout: [] }>()
+
+const username = computed(() => props.username || '未登录')
+const initial = computed(() => username.value.charAt(0).toUpperCase())
+
+const navEl = ref<HTMLElement | null>(null)
+const footerEl = ref<HTMLElement | null>(null)
 
 const navItems = [
   { to: '/image-gen', icon: '🖼️', label: 'GPT Image 生成' }
 ]
+
+function onToggle(e: MouseEvent) {
+  pulse(e.currentTarget as HTMLElement)
+  emit('toggle')
+}
+
+onMounted(() => {
+  if (navEl.value) {
+    fadeInUp(Array.from(navEl.value.querySelectorAll<HTMLElement>('.nav-item')), { distance: 8 })
+  }
+  if (footerEl.value) fadeInUp(footerEl.value, { delay: 120, distance: 8 })
+})
 </script>
 
 <style scoped>
@@ -87,4 +126,55 @@ const navItems = [
 
 .nav-icon  { font-size: 18px; flex-shrink: 0; }
 .nav-label { overflow: hidden; text-overflow: ellipsis; }
+
+/* ===== Account footer ===== */
+/* margin-top:auto pins this to the bottom regardless of how many nav items
+   there are, so adding pages later does not push it around. */
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--shadow-dark);
+  display: flex; flex-direction: column; gap: 8px;
+}
+
+.account {
+  display: flex; align-items: center; gap: 9px;
+  padding: 6px 4px;
+  min-width: 0;
+}
+.account.mini { justify-content: center; padding: 6px 0; }
+
+.avatar {
+  width: 28px; height: 28px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.account-name {
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.logout-btn {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: 3px 3px 6px var(--shadow-dark), -3px -3px 6px var(--shadow-light);
+  transition: color 0.15s, box-shadow 0.15s;
+}
+.logout-btn.mini { justify-content: center; padding: 8px 0; }
+.logout-btn:hover { color: #c0564a; }
+.logout-btn:active {
+  box-shadow: inset 2px 2px 4px var(--shadow-dark), inset -2px -2px 4px var(--shadow-light);
+}
+.logout-icon { font-size: 14px; }
 </style>
