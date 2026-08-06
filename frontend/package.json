@@ -9,15 +9,17 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "animejs": "4.5.0",
     "axios": "1.7.7",
     "naive-ui": "2.39.0",
     "pinia": "2.2.4",
     "pinia-plugin-persistedstate": "4.1.1",
+    "vfonts": "0.0.3",
     "vue": "3.5.12",
-    "vue-router": "4.4.5",
-    "vfonts": "0.0.3"
+    "vue-router": "4.4.5"
   },
   "devDependencies": {
+    "@types/node": "^22.20.1",
     "@vitejs/plugin-vue": "5.1.4",
     "typescript": "5.6.3",
     "vite": "5.4.10",
