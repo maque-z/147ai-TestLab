@@ -7,7 +7,9 @@
         <template v-if="images.length">· 共 {{ fmtBytes(totalBytes) }}</template>
       </span>
       <span class="spacer" />
-      <n-button text size="tiny" :disabled="!images.length" @click="clearAll">清空</n-button>
+      <button class="btn btn-xs" :disabled="!images.length" @click="clearAll">
+        <span class="ri-icon">🗑</span> 清空
+      </button>
     </div>
 
     <!-- Drop zone doubles as the picker; both paths run the same validation. -->
@@ -53,9 +55,9 @@
           <span>{{ img.width ? `${img.width}×${img.height}` : '…' }} · {{ fmtBytes(img.bytes) }}</span>
         </div>
         <div class="thumb-actions">
-          <button :disabled="i === 0" title="前移" @click.stop="move(i, -1)">←</button>
-          <button :disabled="i === 0" title="设为主图" @click.stop="makeMain(i)">设为主图</button>
-          <button :disabled="i === images.length - 1" title="后移" @click.stop="move(i, 1)">→</button>
+          <button class="btn btn-xs th-btn" :disabled="i === 0" title="前移" @click.stop="move(i, -1)">←</button>
+          <button class="btn btn-xs th-btn" :disabled="i === 0" title="设为主图" @click.stop="makeMain(i)">主图</button>
+          <button class="btn btn-xs th-btn" :disabled="i === images.length - 1" title="后移" @click.stop="move(i, 1)">→</button>
         </div>
       </div>
     </div>
@@ -64,7 +66,6 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { NButton } from 'naive-ui'
 import type { RefImage } from '@/types'
 
 /** Official ceiling for the edits endpoint. */
@@ -231,7 +232,7 @@ function fmtBytes(b: number) {
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
 }
-.remove:hover { background: #c0564a; }
+.remove:hover { background: var(--danger); }
 
 .thumb-meta {
   display: flex; flex-direction: column;
@@ -240,17 +241,8 @@ function fmtBytes(b: number) {
 }
 .thumb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Each action stretches to fill its third of the row */
 .thumb-actions { display: flex; gap: 3px; }
-.thumb-actions button {
-  flex: 1;
-  padding: 2px 0;
-  border: none; border-radius: 5px;
-  background: var(--bg);
-  color: var(--text-muted);
-  font-size: 9.5px;
-  cursor: pointer;
-  box-shadow: 1px 1px 3px var(--shadow-dark), -1px -1px 3px var(--shadow-light);
-}
-.thumb-actions button:disabled { opacity: 0.35; cursor: not-allowed; }
-.thumb-actions button:not(:disabled):hover { color: var(--accent); }
+.th-btn { flex: 1; min-width: 0; padding: 0 2px; }
+.ri-icon { font-size: 11px; }
 </style>

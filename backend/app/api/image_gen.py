@@ -306,9 +306,6 @@ async def edit(
     The first upload is the canvas being edited; the rest are reference images.
     The mask applies only to the first one, and its fully transparent pixels are
     the region the model is asked to repaint.
-
-    Note there is no `input_fidelity` param: gpt-image-2 rejects it outright and
-    always processes inputs at high fidelity.
     """
     cfg = require_config(db, current_user.id)
 

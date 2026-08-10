@@ -2,61 +2,74 @@
   <div class="panel">
     <!-- ===== Config card (collapsible) ===== -->
     <div class="config-card nm-raised">
-      <div class="config-head">
-        <button class="collapse-btn" :title="collapsed ? '展开参数' : '收起参数'" @click="collapsed = !collapsed">
-          <span class="chev" :class="{ open: !collapsed }">›</span>
+      <!-- Whole strip toggles the body, so the small chevron is no longer the
+           only target. Clicks landing on a real control inside are ignored: see
+           onHeadClick. -->
+      <div
+        class="config-head"
+        :class="{ 'head-clickable': isBatch }"
+        :title="isBatch ? (store.paramsCollapsed ? '点击展开参数' : '点击收起参数') : ''"
+        @click="onHeadClick"
+      >
+        <div class="collapse-btn">
+          <span class="chev" :class="{ open: isBatch && !store.paramsCollapsed }">›</span>
           <span class="collapse-label">参数</span>
-        </button>
+        </div>
 
-        <!-- Two endpoints, one param matrix and one result grid below. -->
+        <!-- Two endpoints, one param matrix and one result grid below.
+             测试 is a third pane, not a third endpoint: it runs a fixed suite
+             from its own store rather than expanding the matrix below. -->
         <div class="tabs">
-          <button class="tab" :class="{ on: mode === 'generate' }" @click="switchMode('generate', $event)">
+          <button class="tab" :class="{ on: isBatch && store.mode === 'generate' }" @click="switchMode('generate', $event)">
             生成
           </button>
-          <button class="tab" :class="{ on: mode === 'edit' }" @click="switchMode('edit', $event)">
+          <button class="tab" :class="{ on: isBatch && store.mode === 'edit' }" @click="switchMode('edit', $event)">
             编辑
+          </button>
+          <button class="tab" :class="{ on: store.view === 'test' }" @click="switchView('test', $event)">
+            测试
           </button>
         </div>
 
         <div class="head-info">
-          <span class="count-badge nm-inset">
+          <span v-if="isBatch" class="count-badge nm-inset">
             {{ shownRequests }} 请求 / {{ shownImages }} 图
           </span>
-          <span v-if="store.generating" class="progress text-muted">
-            <n-spin :size="12" />
-            {{ store.doneCount }} / {{ store.totalCount }}
+          <span v-else class="count-badge nm-inset">
+            17 探测 / 并发 50
           </span>
         </div>
 
-        <div class="head-actions">
+        <div v-if="isBatch" class="head-actions">
+          <!-- Stopping is per-card; this is the bulk escape hatch, since a wide
+               matrix would otherwise take one click per card to abandon. -->
+          <button
+            v-if="store.generating"
+            class="btn btn-sm btn-danger"
+            title="停止整批，已完成的卡片保留"
+            @click="store.stop()"
+          >
+            <span class="btn-icon">■</span> 全部停止
+          </button>
+
           <!-- Hidden mid-batch: clearing the array detaches the cards the running
                pool is still writing to, so its progress would vanish silently. -->
-          <n-button
-            v-if="store.jobs.length && !store.generating"
-            text size="small"
-            @click="store.clearJobs()"
-          >清除结果</n-button>
-
-          <button v-if="store.generating" class="stop-btn nm-btn" @click="store.stop()">
-            ■ 停止
-          </button>
           <button
-            v-else
-            class="gen-btn nm-btn"
-            :disabled="!canRun"
-            :title="blockReason"
-            @click="handleGenerate"
+            v-if="visibleJobs.length && !store.generating"
+            class="btn btn-sm"
+            title="移除下方所有结果卡片"
+            @click="store.clearJobs()"
           >
-            ✨ {{ mode === 'edit' ? '编辑' : '生成' }} {{ shownImages }} 张
+            <span class="btn-icon">🗑</span> 清除结果
           </button>
         </div>
       </div>
 
-      <div v-show="!collapsed" ref="bodyEl" class="config-body">
+      <div v-show="isBatch && !store.paramsCollapsed" ref="bodyEl" class="config-body">
         <!-- Edit-only inputs: the first upload is the canvas, the rest are
              references, and the mask applies to the first one only. -->
-        <template v-if="mode === 'edit'">
-          <RefImages v-model="refImages" />
+        <template v-if="store.mode === 'edit'">
+          <RefImages v-model="store.refImages" />
 
           <div class="field">
             <div class="field-label">
@@ -65,11 +78,11 @@
                 可选 · 涂抹处会被重绘 · 只作用于主图
               </span>
               <span class="spacer" />
-              <span class="mask-flag" :class="{ on: !!mask }">
-                {{ mask ? '本次将上传蒙版' : '本次不上传蒙版' }}
+              <span class="mask-flag" :class="{ on: !!store.mask }">
+                {{ store.mask ? '本次将上传蒙版' : '本次不上传蒙版' }}
               </span>
             </div>
-            <MaskEditor :image="refImages[0] ?? null" @change="mask = $event" />
+            <MaskEditor :image="store.refImages[0] ?? null" @change="store.mask = $event" />
           </div>
         </template>
 
@@ -77,12 +90,12 @@
         <div class="field">
           <div class="field-label">
             提示词
-            <span class="text-muted" style="font-weight:400">{{ prompt.length }} 字</span>
+            <span class="text-muted" style="font-weight:400">{{ store.prompt.length }} 字</span>
           </div>
           <n-input
-            v-model:value="prompt"
+            v-model:value="store.prompt"
             type="textarea"
-            :placeholder="mode === 'edit' ? '描述要如何修改这些图片...' : '描述你想生成的图片...'"
+            :placeholder="store.mode === 'edit' ? '描述要如何修改这些图片...' : '描述你想生成的图片...'"
             :rows="3"
             class="prompt-input"
           />
@@ -93,11 +106,15 @@
           <div class="field-label">
             图片尺寸
             <span class="text-muted" style="font-weight:400">
-              {{ matrix.sizes.length ? `已选 ${matrix.sizes.length} / ${ALL_SIZES.length}` : `默认 ${DEFAULTS.size}` }}
+              {{ store.matrix.sizes.length ? `已选 ${store.matrix.sizes.length} / ${ALL_SIZES.length}` : `默认 ${DEFAULTS.size}` }}
             </span>
             <span class="spacer" />
-            <n-button text size="tiny" @click="selectAllSizes">全选</n-button>
-            <n-button text size="tiny" @click="matrix.sizes = []">清空</n-button>
+            <button class="btn btn-xs" @click="selectAllSizes">全选</button>
+            <button
+              class="btn btn-xs"
+              :disabled="!store.matrix.sizes.length"
+              @click="store.matrix.sizes = []"
+            >清空</button>
           </div>
           <table class="size-table">
             <thead>
@@ -115,7 +132,7 @@
                   v-for="size in row.sizes"
                   :key="size"
                   class="size-cell"
-                  :class="{ on: matrix.sizes.includes(size) }"
+                  :class="{ on: store.matrix.sizes.includes(size) }"
                   @click="toggleSize(size)"
                 >
                   {{ size.replace('x', '×') }}
@@ -131,13 +148,13 @@
           <div class="field">
             <div class="field-label">
               质量
-              <span class="text-muted" style="font-weight:400">{{ multLabel(matrix.qualities, DEFAULTS.quality) }}</span>
+              <span class="text-muted" style="font-weight:400">{{ multLabel(store.matrix.qualities, DEFAULTS.quality) }}</span>
             </div>
             <div class="chips">
               <button
                 v-for="o in QUALITIES" :key="o"
-                class="chip" :class="{ on: matrix.qualities.includes(o) }"
-                @click="toggle(matrix.qualities, o)"
+                class="chip" :class="{ on: store.matrix.qualities.includes(o) }"
+                @click="toggle(store.matrix.qualities, o)"
               >{{ o }}</button>
             </div>
           </div>
@@ -145,13 +162,13 @@
           <div class="field">
             <div class="field-label">
               输出格式
-              <span class="text-muted" style="font-weight:400">{{ multLabel(matrix.formats, DEFAULTS.format) }}</span>
+              <span class="text-muted" style="font-weight:400">{{ multLabel(store.matrix.formats, DEFAULTS.format) }}</span>
             </div>
             <div class="chips">
               <button
                 v-for="o in FORMATS" :key="o"
-                class="chip" :class="{ on: matrix.formats.includes(o) }"
-                @click="toggle(matrix.formats, o)"
+                class="chip" :class="{ on: store.matrix.formats.includes(o) }"
+                @click="toggle(store.matrix.formats, o)"
               >{{ o }}</button>
             </div>
           </div>
@@ -159,13 +176,13 @@
           <div class="field">
             <div class="field-label">
               内容审核
-              <span class="text-muted" style="font-weight:400">{{ multLabel(matrix.moderations, DEFAULTS.moderation) }}</span>
+              <span class="text-muted" style="font-weight:400">{{ multLabel(store.matrix.moderations, DEFAULTS.moderation) }}</span>
             </div>
             <div class="chips">
               <button
                 v-for="o in MODERATIONS" :key="o"
-                class="chip" :class="{ on: matrix.moderations.includes(o) }"
-                @click="toggle(matrix.moderations, o)"
+                class="chip" :class="{ on: store.matrix.moderations.includes(o) }"
+                @click="toggle(store.matrix.moderations, o)"
               >{{ o }}</button>
             </div>
           </div>
@@ -175,12 +192,12 @@
         <div class="num-grid">
           <div class="field">
             <div class="field-label">每请求张数 (n)</div>
-            <n-input-number v-model:value="matrix.n" :min="1" :max="10" size="small" style="width:100%" />
+            <n-input-number v-model:value="store.matrix.n" :min="1" :max="10" size="small" style="width:100%" />
           </div>
           <div class="field">
             <div class="field-label">压缩质量 <span class="text-muted" style="font-weight:400">jpeg/webp</span></div>
             <n-input-number
-              v-model:value="matrix.output_compression"
+              v-model:value="store.matrix.output_compression"
               :min="1" :max="100" size="small" style="width:100%"
               :placeholder="`默认 ${DEFAULTS.compression}`"
               clearable
@@ -188,16 +205,19 @@
             />
           </div>
           <div class="field">
-            <div class="field-label">并发数</div>
-            <n-input-number v-model:value="matrix.concurrency" :min="1" :max="30" size="small" style="width:100%" />
+            <div class="field-label">最大并发数</div>
+            <n-input-number v-model:value="store.matrix.concurrency" :min="1" :max="60" size="small" style="width:100%" />
           </div>
         </div>
       </div>
     </div>
 
-    <!-- ===== Results ===== -->
-    <div v-if="store.jobs.length" ref="gridEl" class="results-grid">
-      <div v-for="job in store.jobs" :key="job.id" class="card nm-raised" :data-job="job.id">
+    <!-- ===== Test panel ===== -->
+    <ApiTestPanel v-if="store.view === 'test'" class="test-panel-wrapper" />
+
+    <!-- ===== Results (batch mode only) ===== -->
+    <div v-else-if="visibleJobs.length" ref="gridEl" class="results-grid">
+      <div v-for="job in visibleJobs" :key="job.id" class="card nm-raised" :data-job="job.id">
         <div class="canvas" @click="activeImg(job)?.src && openPreview(job)">
           <img
             v-if="activeImg(job)?.src"
@@ -283,10 +303,30 @@
             </span>
           </div>
 
+          <!-- One slot, two jobs: stop while this combination is in flight, then
+               download once it lands. Per-card so stopping one combination can
+               never be mistaken for stopping the batch. -->
           <div class="card-actions">
-            <n-button v-if="activeImg(job)?.src" text size="tiny" @click.stop="download(job)">
-              下载{{ job.images.length > 1 ? ` 第${job.activeIndex + 1}张` : '' }}
-            </n-button>
+            <button
+              v-if="job.status === 'pending' || job.status === 'running'"
+              class="btn btn-sm btn-danger card-btn"
+              :title="job.status === 'running' ? '中断这一张，其余继续' : '这一张还没发出，取消它'"
+              @click.stop="store.stopJob(job.id)"
+            >
+              <span class="btn-icon">■</span>
+              {{ job.status === 'running' ? '停止' : '取消排队' }}
+            </button>
+
+            <button
+              v-else-if="activeImg(job)?.src"
+              class="btn btn-sm btn-primary card-btn"
+              title="保存这张图片"
+              @click.stop="download(job)"
+            >
+              <span class="btn-icon">⤓</span>
+              下载{{ job.images.length > 1 ? ` 第 ${job.activeIndex + 1} 张` : '' }}
+            </button>
+
             <span
               v-if="activeImg(job)?.revisedPrompt"
               class="text-muted revised"
@@ -297,9 +337,9 @@
       </div>
     </div>
 
-    <div v-else class="empty-state text-muted">
+    <div v-else-if="isBatch" class="empty-state text-muted">
       <div class="empty-icon">🖼️</div>
-      <p>选择尺寸与参数，点击生成开始并发测试</p>
+      <p>选择尺寸与参数，点右上角「生成」开始并发测试</p>
     </div>
 
     <!-- Preview: walks every image in the grid, not just the current card -->
@@ -308,38 +348,69 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, watch, nextTick } from 'vue'
-import { useMessage, NInput, NInputNumber, NButton, NSpin } from 'naive-ui'
+import { ref, computed, watch, nextTick } from 'vue'
+import { NInput, NInputNumber, NSpin } from 'naive-ui'
 import { useImageGenStore } from '@/stores/imageGen'
 import { enterCards, fadeInUp, pulse, countTo } from '@/utils/motion'
 import RefImages from './RefImages.vue'
 import MaskEditor from './MaskEditor.vue'
+import ApiTestPanel from './ApiTestPanel.vue'
 import ImagePreview, { type PreviewItem } from './ImagePreview.vue'
-import type { GenMode, ImageJob, JobImage, ParamMatrix, RefImage } from '@/types'
+import type { GenMode, ImageJob, JobImage } from '@/types'
 
-const message = useMessage()
+/** Prompt, matrix, mode and the uploads all live in the store: the run button
+ *  sits in the top bar, in a different component tree, and needs the same state. */
 const store = useImageGenStore()
-const collapsed = ref(false)
+
+/** Jobs for whichever endpoint tab is active. The two pools are separate so
+ *  switching tabs never loses the other side's results. */
+const visibleJobs = computed(() =>
+  store.mode === 'edit' ? store.editJobs : store.generateJobs
+)
+
 const previewVisible = ref(false)
 const previewStart = ref(0)
 const gridEl = ref<HTMLElement | null>(null)
 const bodyEl = ref<HTMLElement | null>(null)
 
-/** Which endpoint the next batch runs against. Both share the param matrix and
- *  the result grid below, so switching keeps everything else in place. */
-const mode = ref<GenMode>('generate')
-const refImages = ref<RefImage[]>([])
-const mask = ref<Blob | null>(null)
+/** True when either batch endpoint is showing, i.e. not the test suite. Every
+ *  matrix control and the results grid are scoped to this. */
+const isBatch = computed(() => store.view === 'batch')
 
 /** Switching endpoints swaps the whole param body, so the new content is
- *  revealed rather than replaced instantly. */
+ *  revealed rather than replaced instantly. Also leaves the test pane, since the
+ *  two endpoint tabs and the test tab share one row. */
 function switchMode(next: GenMode, e: MouseEvent) {
-  if (mode.value === next) return
-  mode.value = next
+  if (store.mode === next && isBatch.value) return
+  store.mode = next
+  store.view = 'batch'
   pulse(e.currentTarget as HTMLElement)
   nextTick(() => {
     if (bodyEl.value) fadeInUp(bodyEl.value, { distance: 6 })
   })
+}
+
+/** Show the fixed compatibility suite. Its requests and results live in their
+ *  own store, so nothing here is disturbed by switching away and back. */
+function switchView(next: 'batch' | 'test', e: MouseEvent) {
+  if (store.view === next) return
+  store.view = next
+  pulse(e.currentTarget as HTMLElement)
+}
+
+/** Collapse/expand from anywhere on the header strip.
+ *
+ *  The tabs and the stop/clear buttons live in the same strip, so a bare click
+ *  handler here would fire on those too — switching endpoint would also collapse
+ *  the body the user just asked to see. Anything interactive is excluded.
+ *
+ *  Only meaningful in batch mode: the test pane has no collapsible body.
+ */
+function onHeadClick(e: MouseEvent) {
+  if (!isBatch.value) return
+  const el = e.target as HTMLElement
+  if (el.closest('button, a, input, .tabs')) return
+  store.paramsCollapsed = !store.paramsCollapsed
 }
 
 /** Official recommended sizes: 10 aspect ratios × 3 resolution tiers. */
@@ -378,77 +449,8 @@ const DEFAULTS = {
   compression: 100,
 } as const
 
-const DEFAULT_PROMPT = `深圳一日游手绘地图插画，清新可爱手绘风格，旅行手账风，地图式俯视构图（top-down map illustration），整体布局清晰有层次，色彩明亮柔和，带轻微水彩质感。
-
-画面中展示深圳主要景点，使用卡通手绘插画表现，每个景点独立标注，并配有清晰、规范、标准简体中文文字说明（非常重要：文字必须正确、无错别字、无乱码、可读性强）。
-
-📍 景点与文字（要求严格按以下内容生成）
-世界之窗
-文字：世界文化景观缩影
-深圳湾公园
-文字：滨海休闲好去处
-大梅沙海滨公园
-文字：深圳经典海滩
-东部华侨城
-文字：生态旅游度假区
-莲花山公园
-文字：俯瞰深圳城市风光
-平安金融中心
-文字：深圳第一高楼
-华强北
-文字：电子科技天堂
-
-🎨 风格细化（提高出图质量关键）
-手绘插画风格（hand-drawn illustration）
-旅行手账 / 地图插画风（travel sketch map style）
-线条干净柔和（clean soft lines）
-色彩清新明亮（bright pastel colors）
-轻微水彩渲染（light watercolor texture）
-元素可爱卡通化（cute cartoon landmarks）
-布局类似旅游导览图（tourist guide map layout）
-
-🔤 中文文字优化约束（非常关键）
-所有文字必须为简体中文
-字体工整清晰（类似印刷体 / 手写清晰体）
-禁止乱码、拼写错误、缺字、多字
-每个景点文字紧贴对应图标
-文字大小适中，保证可读性
-不要生成无意义符号或英文替代
-
-highly legible Chinese text, correct spelling, no garbled characters, no distorted glyphs
-
-🖼️ 输出要求
-横版 16:9
-高分辨率（4K / high resolution）
-适合海报或旅游宣传册展示`
-
-const prompt = ref(DEFAULT_PROMPT)
-
-// Everything starts unselected: the default run is one request with nothing but
-// the prompt, which is the baseline every other combination is compared against.
-const matrix = reactive<ParamMatrix>({
-  sizes: [],
-  qualities: [],
-  formats: [],
-  moderations: [],
-  n: 1,
-  output_compression: null,
-  concurrency: 6,
-})
-
-/** An empty group still yields one request — the API's own default. */
-const rowCount = (arr: unknown[]) => arr.length || 1
-
-/** Clearing the input yields null, which would make the counts NaN. */
-const perRequest = computed(() => matrix.n || 1)
-
-const totalRequests = computed(() =>
-  rowCount(matrix.sizes) * rowCount(matrix.qualities) *
-  rowCount(matrix.formats) * rowCount(matrix.moderations)
-)
-const totalImages = computed(() => totalRequests.value * perRequest.value)
 const hasLossyFormat = computed(() =>
-  matrix.formats.includes('jpeg') || matrix.formats.includes('webp')
+  store.matrix.formats.includes('jpeg') || store.matrix.formats.includes('webp')
 )
 
 /** Label for a chip group: how many requests it multiplies the batch by, or the
@@ -466,45 +468,34 @@ function toggle(arr: string[], v: string) {
 }
 
 function toggleSize(size: string) {
-  const i = matrix.sizes.indexOf(size)
-  if (i >= 0) matrix.sizes.splice(i, 1)
-  else matrix.sizes.push(size)
+  toggle(store.matrix.sizes, size)
 }
 
 function selectAllSizes() {
-  matrix.sizes = [...ALL_SIZES]
+  store.matrix.sizes = [...ALL_SIZES]
 }
 
 /** Row/column headers act as bulk toggles: fill if any are missing, else clear. */
 function toggleRow(row: { sizes: string[] }) {
-  const missing = row.sizes.filter(s => !matrix.sizes.includes(s))
-  if (missing.length) matrix.sizes.push(...missing)
-  else matrix.sizes = matrix.sizes.filter(s => !row.sizes.includes(s))
+  const missing = row.sizes.filter(s => !store.matrix.sizes.includes(s))
+  if (missing.length) store.matrix.sizes.push(...missing)
+  else store.matrix.sizes = store.matrix.sizes.filter(s => !row.sizes.includes(s))
 }
 
 function toggleCol(tierIndex: number) {
   const col = SIZE_TABLE.map(r => r.sizes[tierIndex])
-  const missing = col.filter(s => !matrix.sizes.includes(s))
-  if (missing.length) matrix.sizes.push(...missing)
-  else matrix.sizes = matrix.sizes.filter(s => !col.includes(s))
+  const missing = col.filter(s => !store.matrix.sizes.includes(s))
+  if (missing.length) store.matrix.sizes.push(...missing)
+  else store.matrix.sizes = store.matrix.sizes.filter(s => !col.includes(s))
 }
-
-/** Why the run button is disabled, surfaced as its tooltip rather than left for
- *  the user to guess. */
-const blockReason = computed(() => {
-  if (!prompt.value.trim()) return '请先填写提示词'
-  if (mode.value === 'edit' && !refImages.value.length) return '编辑模式至少需要 1 张参考图'
-  return ''
-})
-const canRun = computed(() => !blockReason.value && totalRequests.value > 0)
 
 /** Counters tween to their new value, so a matrix change reads as the batch
  *  growing rather than a number silently swapping. */
-const shownRequests = ref(totalRequests.value)
-const shownImages = ref(totalImages.value)
+const shownRequests = ref(store.totalRequests)
+const shownImages = ref(store.totalImages)
 
-watch(totalRequests, (to, from) => countTo(from, to, v => (shownRequests.value = v)))
-watch(totalImages, (to, from) => countTo(from, to, v => (shownImages.value = v)))
+watch(() => store.totalRequests, (to, from) => countTo(from, to, v => (shownRequests.value = v)))
+watch(() => store.totalImages, (to, from) => countTo(from, to, v => (shownImages.value = v)))
 
 /** Animate only cards that have not been seen before.
  *
@@ -514,12 +505,12 @@ watch(totalImages, (to, from) => countTo(from, to, v => (shownImages.value = v))
  */
 const animatedJobs = new Set<number>()
 
-watch(() => store.jobs.map(j => j.id).join(','), async () => {
+watch(() => visibleJobs.value.map(j => j.id).join(','), async () => {
   await nextTick()
   const grid = gridEl.value
   if (!grid) {
     // Grid is unmounted when the list empties; let ids animate again if reused.
-    if (!store.jobs.length) animatedJobs.clear()
+    if (!visibleJobs.value.length) animatedJobs.clear()
     return
   }
   const fresh = Array.from(grid.querySelectorAll<HTMLElement>('.card')).filter(el => {
@@ -530,22 +521,6 @@ watch(() => store.jobs.map(j => j.id).join(','), async () => {
   })
   enterCards(fresh)
 })
-
-async function handleGenerate() {
-  if (!canRun.value) return
-  collapsed.value = true
-  try {
-    await store.generateMatrix(
-      prompt.value,
-      { ...matrix, sizes: [...matrix.sizes], n: perRequest.value },
-      mode.value === 'edit'
-        ? { images: refImages.value.map(r => r.file), mask: mask.value }
-        : undefined,
-    )
-  } catch (e: any) {
-    message.error(e?.message || '生成失败')
-  }
-}
 
 /** The image the card is currently showing, or undefined before any arrive. */
 function activeImg(job: ImageJob): JobImage | undefined {
@@ -664,7 +639,7 @@ function compareRows(job: ImageJob): CompareRow[] {
 /** Every rendered image in the grid, flattened in display order, so the viewer's
  *  arrows walk the whole batch instead of stopping at the card boundary. */
 const previewItems = computed<PreviewItem[]>(() =>
-  store.jobs.flatMap(job =>
+  visibleJobs.value.flatMap(job =>
     job.images
       .filter(img => !!img.src)
       .map((img, i) => ({
@@ -682,7 +657,7 @@ const previewItems = computed<PreviewItem[]>(() =>
 /** Map a click on one card's thumbnail to its position in that flat list. */
 function openPreview(job: ImageJob) {
   let offset = 0
-  for (const j of store.jobs) {
+  for (const j of visibleJobs.value) {
     const shown = j.images.filter(img => !!img.src)
     if (j.id === job.id) {
       const img = activeImg(job)
@@ -750,12 +725,21 @@ function fmtFullTime(ts: number) {
   flex-wrap: wrap;
 }
 
+/* When in batch mode the whole strip acts as a toggle target. The cursor
+   changes to signal this, but buttons inside retain their own pointer. */
+.config-head.head-clickable {
+  cursor: pointer;
+}
+.config-head.head-clickable button,
+.config-head.head-clickable .tabs { cursor: default; }
+
 .collapse-btn {
   display: flex; align-items: center; gap: 6px;
-  border: none; background: transparent;
+  background: transparent;
   color: var(--text-primary);
   font-size: 13px; font-weight: 600;
-  cursor: pointer; padding: 4px 0;
+  padding: 4px 0;
+  pointer-events: none; /* click is handled by the parent strip */
 }
 .chev {
   display: inline-block;
@@ -780,24 +764,22 @@ function fmtFullTime(ts: number) {
   border: none;
   border-radius: 7px;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--text-primary);
   font-size: 12px; font-weight: 600;
   cursor: pointer;
   transition: color 0.15s, background 0.15s;
 }
-.tab:hover { color: var(--text-primary); }
+.tab:hover { color: var(--accent-strong); }
 .tab.on {
   color: #fff;
-  background: var(--accent);
-}.count-badge {
+  background: var(--accent-strong);
+}
+
+.count-badge {
   padding: 4px 12px;
   border-radius: 999px;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-}
-.progress {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 12px; font-variant-numeric: tabular-nums;
 }
 
 .head-actions {
@@ -805,33 +787,7 @@ function fmtFullTime(ts: number) {
   display: flex; align-items: center; gap: 10px;
 }
 
-.gen-btn {
-  height: 36px;
-  padding: 0 20px;
-  border: none;
-  border-radius: 10px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 13px; font-weight: 600;
-  cursor: pointer; white-space: nowrap;
-  display: inline-flex; align-items: center;
-}
-.gen-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.gen-btn:not(:disabled):hover { background: var(--accent-hover); }
-
-/* Same footprint as .gen-btn so the header does not shift when they swap */
-.stop-btn {
-  height: 36px;
-  padding: 0 20px;
-  border: none;
-  border-radius: 10px;
-  background: #c0564a;
-  color: #fff;
-  font-size: 13px; font-weight: 600;
-  cursor: pointer; white-space: nowrap;
-  display: inline-flex; align-items: center;
-}
-.stop-btn:hover { background: #a94a3f; }
+.btn-icon { font-size: 12px; }
 
 .config-body {
   display: flex; flex-direction: column; gap: 16px;
@@ -854,7 +810,7 @@ function fmtFullTime(ts: number) {
   font-size: 10.5px; font-weight: 600;
   color: var(--text-muted);
 }
-.mask-flag.on { color: var(--accent); }
+.mask-flag.on { color: var(--accent-strong); }
 
 .prompt-input :deep(.n-input__textarea-el) {
   background: transparent !important;
@@ -872,24 +828,24 @@ function fmtFullTime(ts: number) {
 .size-table th {
   padding: 4px 8px;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--text-primary);
   cursor: pointer;
   user-select: none;
   border-radius: 6px;
 }
-.size-table th:hover:not(.ratio-th) { color: var(--accent); }
-.ratio-th { cursor: default; }
+.size-table th:hover:not(.ratio-th) { color: var(--accent-strong); }
+.ratio-th { cursor: default; color: var(--text-muted); }
 
 .ratio-td {
   padding: 5px 8px;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--text-primary);
   cursor: pointer;
   user-select: none;
   border-radius: 6px;
   text-align: right;
 }
-.ratio-td:hover { color: var(--accent); }
+.ratio-td:hover { color: var(--accent-strong); }
 
 .size-cell {
   padding: 5px 10px;
@@ -897,15 +853,15 @@ function fmtFullTime(ts: number) {
   cursor: pointer;
   user-select: none;
   text-align: center;
-  color: var(--text-muted);
+  color: var(--text-primary);
   box-shadow: 2px 2px 4px var(--shadow-dark), -2px -2px 4px var(--shadow-light);
   transition: color 0.15s, box-shadow 0.15s;
 }
-.size-cell:hover { color: var(--text-primary); }
+.size-cell:hover { color: var(--accent-strong); }
 .size-cell.on {
   color: #fff;
-  background: var(--accent);
-  box-shadow: inset 2px 2px 4px rgba(0, 0, 0, 0.15);
+  background: var(--accent-strong);
+  box-shadow: inset 2px 2px 4px rgba(0, 0, 0, 0.18);
 }
 
 /* ===== Chips ===== */
@@ -920,17 +876,18 @@ function fmtFullTime(ts: number) {
   border: none;
   border-radius: 7px;
   background: var(--bg);
-  color: var(--text-muted);
+  color: var(--text-primary);
   font-size: 11.5px;
+  font-weight: 600;
   cursor: pointer;
   box-shadow: 2px 2px 4px var(--shadow-dark), -2px -2px 4px var(--shadow-light);
   transition: color 0.15s, background 0.15s;
 }
-.chip:hover { color: var(--text-primary); }
+.chip:hover { color: var(--accent-strong); }
 .chip.on {
   color: #fff;
-  background: var(--accent);
-  box-shadow: inset 2px 2px 4px rgba(0, 0, 0, 0.15);
+  background: var(--accent-strong);
+  box-shadow: inset 2px 2px 4px rgba(0, 0, 0, 0.18);
 }
 
 .num-grid {
@@ -953,18 +910,24 @@ function fmtFullTime(ts: number) {
   display: flex; flex-direction: column;
 }
 
-/* Square canvas: any aspect ratio letterboxes inside it, so a 3:1 image
-   renders as a wide band with padding above and below. */
+/* Fixed square canvas. Everything inside is absolutely positioned so no image
+   or state block can contribute intrinsic height — a tall portrait would
+   otherwise out-vote aspect-ratio via min-content sizing and stretch the box,
+   which is what made cards render at mismatched heights. */
 .canvas {
   position: relative;
-  aspect-ratio: 1;
-  display: flex; align-items: center; justify-content: center;
+  aspect-ratio: 1 / 1;
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
   cursor: pointer;
-  background-color: #dfe4ea;
+  background-color: var(--surface-sunken, #dfe4ea);
 }
 
 .thumb {
-  max-width: 100%; max-height: 100%;
+  position: absolute;
+  inset: 0;
+  width: 100%; height: 100%;
   object-fit: contain;
   display: block;
 }
@@ -986,6 +949,8 @@ function fmtFullTime(ts: number) {
   transition: opacity 0.15s, background 0.15s;
 }
 .card:hover .nav { opacity: 1; }
+/* Keyboard users never trigger :hover, so the arrows have to surface on focus */
+.nav:focus-visible { opacity: 1; outline: 2px solid #fff; outline-offset: -2px; }
 .nav:hover { background: rgba(0, 0, 0, 0.6); }
 .nav.prev { left: 6px; }
 .nav.next { right: 6px; }
@@ -1003,6 +968,8 @@ function fmtFullTime(ts: number) {
 }
 
 .canvas-state {
+  position: absolute;
+  inset: 0;
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
   gap: 8px; padding: 12px; text-align: center;
@@ -1010,7 +977,7 @@ function fmtFullTime(ts: number) {
 .state-icon { font-size: 26px; }
 .state-icon.dim { opacity: 0.45; }
 .state-label { font-size: 11px; }
-.canvas-state.err { color: #c0564a; }
+.canvas-state.err { color: var(--danger); }
 .err-text {
   font-size: 10.5px; line-height: 1.4;
   display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical;
@@ -1048,7 +1015,7 @@ function fmtFullTime(ts: number) {
 .meta-row3 > :nth-child(2) { color: var(--text-muted); }
 .meta-row3 > :nth-child(3) { font-weight: 600; }
 /* Highlight only the actual value — the request is never the thing that is wrong */
-.meta-row3.bad > :nth-child(3) { color: #c0564a; }
+.meta-row3.bad > :nth-child(3) { color: var(--danger); }
 
 .meta-row3 > span {
   overflow: hidden;
@@ -1059,13 +1026,15 @@ function fmtFullTime(ts: number) {
 .strong-num { font-weight: 600; }
 
 .card-actions {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 8px; margin-top: 4px;
+  display: flex; align-items: center;
+  gap: 8px; margin-top: 7px;
 }
+/* Fills the row so the card's one action is an unmissable target */
+.card-btn { flex: 1; min-width: 0; }
 .revised {
   font-size: 10px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  max-width: 110px;
+  max-width: 92px;
 }
 
 .empty-state {
@@ -1074,4 +1043,8 @@ function fmtFullTime(ts: number) {
   min-height: 260px; gap: 12px; text-align: center;
 }
 .empty-icon { font-size: 48px; opacity: 0.4; }
+
+/* The test panel stretches to fill whatever the outer column gives it.
+   min-height keeps the terminal readable even when there are no results yet. */
+.test-panel-wrapper { min-height: 600px; }
 </style>

@@ -161,3 +161,57 @@ export interface ImageJob {
 export interface ApiError {
   detail: string
 }
+
+// ===== API compatibility test =====
+
+/** Which param a probe is isolating. One factor at a time: every other param is
+ *  left unset, so a mismatch can only be attributed to this one. */
+export type TestDimension =
+  | 'size' | 'quality' | 'format' | 'compression' | 'n' | 'edit'
+
+/** One upstream request in the suite. `req` carries only the param under test. */
+export interface TestCase {
+  id: string
+  label: string
+  dimension: TestDimension
+  req: Omit<GenerateRequest, 'prompt'>
+  /** Goes to /edit with the seed reference image instead of /generate. */
+  isEdit?: boolean
+}
+
+/** pass/fail is a claim about the API, so it is only used where the response can
+ *  actually settle the question. `info` covers probes that record a value without
+ *  a right answer (the default-value probe), and `ratelimit` keeps a 429 from
+ *  being misread as "the param does not work". */
+export type TestVerdict = 'pass' | 'fail' | 'info' | 'ratelimit'
+
+export interface TestResult {
+  case: TestCase
+  status: JobStatus
+  verdict?: TestVerdict
+  /** One-line 请求 → 实际 for this probe, shown on the card and in the log. */
+  detail?: string
+  src?: string
+  bytes?: number
+  /** Format from magic bytes — the authoritative one, not the API's claim. */
+  actualFormat?: string
+  declaredFormat?: string
+  /** How many images the response carried. Only `src` (the first) is rendered,
+   *  so this is what makes a request that returned 2 distinguishable from 1. */
+  imageCount?: number
+  /** Measured in the browser after decode, not taken from the request. */
+  width?: number
+  height?: number
+  elapsedMs?: number
+  inputTokens?: number
+  outputTokens?: number
+  actualModel?: string
+  error?: string
+}
+
+export interface TestLogEntry {
+  id: number
+  ts: string
+  level: 'info' | 'ok' | 'warn' | 'error' | 'rule'
+  text: string
+}

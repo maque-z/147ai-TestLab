@@ -22,9 +22,9 @@
         >⬆ 导入文件</button>
       </div>
       <span class="spacer" />
-      <n-button text size="tiny" :disabled="!hasDrawing" @click="clearAll">
-        清空涂抹
-      </n-button>
+      <button class="btn btn-xs" :disabled="!hasDrawing" @click="clearAll">
+        <span>🗑</span> 清空涂抹
+      </button>
     </div>
 
     <div v-if="mode === 'brush'" class="tool-row" :class="{ dim: !enabled }">
@@ -41,7 +41,9 @@
         <input v-model.number="brush" type="range" :min="4" :max="240" step="2" :disabled="!enabled" />
         <span class="size-num">{{ brush }}</span>
       </label>
-      <n-button text size="tiny" :disabled="!strokes.length || !enabled" @click="undo">↶ 撤销</n-button>
+      <button class="btn btn-xs" :disabled="!strokes.length || !enabled" @click="undo">
+        <span>↶</span> 撤销
+      </button>
     </div>
 
     <div v-else class="tool-row" :class="{ dim: !enabled }">
@@ -96,7 +98,6 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
-import { NButton } from 'naive-ui'
 import type { RefImage } from '@/types'
 
 const props = defineProps<{ image: RefImage | null }>()
@@ -354,13 +355,25 @@ async function buildMask(): Promise<Blob | null> {
   const out = document.createElement('canvas')
   out.width = dims.w
   out.height = dims.h
-  const ctx = out.getContext('2d')
+  const ctx = out.getContext('2d', { willReadFrequently: true })
   if (!ctx) return null
 
+  // Start fully opaque white — every pixel is "don't repaint" by default.
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, dims.w, dims.h)
   ctx.globalCompositeOperation = 'destination-out'
   ctx.drawImage(src, 0, 0)
+
+  // The brush uses 75% opacity paint, so destination-out only reduces alpha to
+  // ~64, not 0. OpenAI treats anything above alpha=0 as "don't repaint", so a
+  // semi-transparent pixel is silently ignored, causing the whole mask to be
+  // skipped. Threshold to binary: < 128 → 0 (repaint), ≥ 128 → 255 (preserve).
+  const id = ctx.getImageData(0, 0, dims.w, dims.h)
+  const d = id.data
+  for (let i = 3; i < d.length; i += 4) {
+    d[i] = d[i] < 128 ? 0 : 255
+  }
+  ctx.putImageData(id, 0, 0)
 
   return await new Promise(resolve => out.toBlob(b => resolve(b), 'image/png'))
 }

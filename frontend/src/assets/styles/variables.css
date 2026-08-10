@@ -4,6 +4,12 @@
   --shadow-light: #ffffff;
   --accent:       #6C9BD1;
   --accent-hover: #5a89bf;
+  /* Fill colour for anything carrying white text. --accent on white is only
+     2.4:1, which is unreadable on a button label; this clears 4.5:1. */
+  --accent-strong: #3D6FA8;
+  --accent-strong-hover: #325C8C;
+  --danger:       #A63A2E;
+  --danger-hover: #8C3026;
   --text-primary: #3a4a5c;
   --text-muted:   #8a9ab0;
   --radius-card:  16px;
