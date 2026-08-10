@@ -173,7 +173,7 @@ export const useImageGenStore = defineStore('imageGen', () => {
     moderations: [],
     n: 1,
     output_compression: null,
-    concurrency: 60,
+    concurrency: 50,
   })
 
   // Progress of the current batch only. Counting the whole list would show the

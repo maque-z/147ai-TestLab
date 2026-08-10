@@ -206,7 +206,7 @@
           </div>
           <div class="field">
             <div class="field-label">最大并发数</div>
-            <n-input-number v-model:value="store.matrix.concurrency" :min="1" :max="60" size="small" style="width:100%" />
+            <n-input-number v-model:value="store.matrix.concurrency" :min="1" :max="50" size="small" style="width:100%" />
           </div>
         </div>
       </div>

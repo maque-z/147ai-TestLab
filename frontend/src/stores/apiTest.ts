@@ -10,7 +10,7 @@ import { useImageGenStore, DEFAULT_PROMPT } from '@/stores/imageGen'
 
 const EDIT_PROMPT = '加上太阳'
 
-const CONCURRENCY = 60
+const CONCURRENCY = 50
 
 /** Sizes to probe — one from each resolution tier, covering both orientations. */
 const TEST_SIZES = [
