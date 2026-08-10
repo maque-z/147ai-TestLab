@@ -126,11 +126,14 @@ async function runPool(tasks: (() => Promise<void>)[], limit: number, signal: Ab
   await Promise.all(Array.from({ length: workers }, worker))
 }
 
-function b64ToBlobUrl(b64: string, mime: string): string {
-  const bin = atob(b64)
-  const bytes = new Uint8Array(bin.length)
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-  return URL.createObjectURL(new Blob([bytes], { type: mime }))
+/** Decode a base64 image off the main thread by delegating to the browser's
+ *  native fetch/blob pipeline.  The synchronous atob + charCodeAt loop blocks
+ *  for tens of milliseconds per image and up to several seconds when 50 jobs
+ *  resolve concurrently.  fetch(data:) is both faster and non-blocking. */
+async function b64ToBlobUrl(b64: string, mime: string): Promise<string> {
+  const resp = await fetch(`data:${mime};base64,${b64}`)
+  const blob = await resp.blob()
+  return URL.createObjectURL(blob)
 }
 
 export const useImageGenStore = defineStore('imageGen', () => {
@@ -365,7 +368,10 @@ export const useImageGenStore = defineStore('imageGen', () => {
 
             // Every image from this request goes on the same card, so its count
             // against the requested n is visible without hunting across the grid.
-            job.images = res.images.map(img => {
+            // Decoding is async now, and the images of one response are decoded
+            // in parallel — they are independent, and awaiting them one at a time
+            // would serialise what the browser can overlap.
+            job.images = await Promise.all(res.images.map(async img => {
               // Magic-byte format is authoritative; the API's claim is recorded
               // separately. `job.format` stays as requested so the card can show
               // requested → actual.
@@ -375,13 +381,13 @@ export const useImageGenStore = defineStore('imageGen', () => {
               const sub = actual ?? job.format ?? 'png'
               return {
                 src: img.b64_json
-                  ? b64ToBlobUrl(img.b64_json, `image/${sub === 'jpg' ? 'jpeg' : sub}`)
+                  ? await b64ToBlobUrl(img.b64_json, `image/${sub === 'jpg' ? 'jpeg' : sub}`)
                   : img.url,
                 bytes: img.byte_size ?? undefined,
                 actualFormat: actual,
                 revisedPrompt: img.revised_prompt ?? undefined,
               }
-            })
+            }))
             job.activeIndex = 0
             job.declaredFormat = res.declared_format ?? undefined
             job.actualModel = res.upstream_model ?? undefined

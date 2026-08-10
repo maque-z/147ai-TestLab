@@ -36,7 +36,7 @@
             {{ shownRequests }} 请求 / {{ shownImages }} 图
           </span>
           <span v-else class="count-badge nm-inset">
-            17 探测 / 并发 50
+            {{ TEST_CASE_COUNT }} 探测 / 并发 {{ CONCURRENCY }}
           </span>
         </div>
 
@@ -354,6 +354,7 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { NInput, NInputNumber, NSpin } from 'naive-ui'
 import { useImageGenStore } from '@/stores/imageGen'
+import { TEST_CASE_COUNT, CONCURRENCY } from '@/stores/apiTest'
 import { enterCards, fadeInUp, pulse, countTo } from '@/utils/motion'
 import RefImages from './RefImages.vue'
 import MaskEditor from './MaskEditor.vue'

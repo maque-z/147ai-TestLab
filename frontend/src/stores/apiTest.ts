@@ -10,7 +10,9 @@ import { useImageGenStore, DEFAULT_PROMPT } from '@/stores/imageGen'
 
 const EDIT_PROMPT = '加上太阳'
 
-const CONCURRENCY = 50
+/** Exported so the panels label themselves from the same number the pool runs
+ *  at — two copies of this drifted apart once already. */
+export const CONCURRENCY = 50
 
 /** Sizes to probe — one from each resolution tier, covering both orientations. */
 const TEST_SIZES = [
@@ -106,11 +108,13 @@ function nowTs() {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
-function b64ToBlobUrl(b64: string, mime: string): string {
-  const bin = atob(b64)
-  const bytes = new Uint8Array(bin.length)
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-  return URL.createObjectURL(new Blob([bytes], { type: mime }))
+/** Same off-thread decode as the imageGen store uses — see the note there. The
+ *  suite fires all 19 probes at once, so a synchronous decode per response is
+ *  exactly the case that stalls the log from scrolling. */
+async function b64ToBlobUrl(b64: string, mime: string): Promise<string> {
+  const resp = await fetch(`data:${mime};base64,${b64}`)
+  const blob = await resp.blob()
+  return URL.createObjectURL(blob)
 }
 
 function measureImage(src: string): Promise<{ w: number; h: number } | null> {
@@ -264,8 +268,26 @@ export const useApiTestStore = defineStore('apiTest', () => {
     running.value = true
     clear()
     ctl = new AbortController()
-    const signal = ctl.signal
+    try {
+      await runSuite(ctl.signal)
+    } finally {
+      // Stopping makes the pool's workers return without claiming the remaining
+      // tasks, so those cards would sit on "等待中…" forever and doneCount would
+      // never reach totalCount. Same sweep as imageGen.ts does for its pools.
+      results.value.forEach(r => {
+        if (r.status === 'pending') r.status = 'cancelled'
+      })
+      // In a finally because a throw anywhere in the suite would otherwise wedge
+      // the panel for good: running stays true, so the 开始 button is v-if'd away
+      // and 停止 is left aborting a controller nothing is listening to.
+      running.value = false
+      ctl = null
+    }
+  }
 
+  /** The suite itself. Split out so run() owns the running/ctl lifecycle and a
+   *  failure in here cannot leave the panel stuck. */
+  async function runSuite(signal: AbortSignal) {
     const cases = buildTestCases()
     results.value = cases.map(c => ({ case: c, status: 'pending' as const }))
 
@@ -323,7 +345,7 @@ export const useApiTestStore = defineStore('apiTest', () => {
           let src: string | undefined
           if (imgData?.b64_json) {
             const fmt = imgData.image_format ?? 'png'
-            src = b64ToBlobUrl(imgData.b64_json, `image/${fmt === 'jpg' ? 'jpeg' : fmt}`)
+            src = await b64ToBlobUrl(imgData.b64_json, `image/${fmt === 'jpg' ? 'jpeg' : fmt}`)
           } else if (imgData?.url) {
             src = imgData.url
           }
@@ -389,8 +411,6 @@ export const useApiTestStore = defineStore('apiTest', () => {
 
     summary.value = buildSummary(elapsed)
     trimResults()
-    running.value = false
-    ctl = null
   }
 
   // ── Group evaluations ────────────────────────────────────────────────────

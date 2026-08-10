@@ -130,11 +130,9 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, computed } from 'vue'
 import { NSpin } from 'naive-ui'
-import { useApiTestStore, TEST_CASE_COUNT } from '@/stores/apiTest'
+import { useApiTestStore, TEST_CASE_COUNT, CONCURRENCY } from '@/stores/apiTest'
 import { useImageGenStore } from '@/stores/imageGen'
 import type { TestResult } from '@/types'
-
-const CONCURRENCY = 50
 
 const store     = useApiTestStore()
 const imageGen  = useImageGenStore()
