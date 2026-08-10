@@ -4,8 +4,10 @@
   --shadow-light: #ffffff;
   --accent:       #6C9BD1;
   --accent-hover: #5a89bf;
-  /* Fill colour for anything carrying white text. --accent on white is only
-     2.4:1, which is unreadable on a button label; this clears 4.5:1. */
+  /* Fill colours for anything carrying white text. Measured against #fff:
+     --accent is 2.90:1, below the 4.5:1 floor, so it cannot hold a button label.
+     --accent-strong 5.20:1, its hover 6.90:1, --danger 6.43:1, hover 8.18:1.
+     --accent-strong on --bg is 4.11:1, clearing the 3:1 floor for a focus ring. */
   --accent-strong: #3D6FA8;
   --accent-strong-hover: #325C8C;
   --danger:       #A63A2E;

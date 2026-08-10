@@ -75,7 +75,10 @@ class Settings(BaseSettings):
     DEFAULT_USERNAME: str = "147ai"
     DEFAULT_PASSWORD: str = ""
 
-    # Login throttling, applied per client IP.
+    # Login throttling, per client IP. MAX_ATTEMPTS within WINDOW_SECONDS trips a
+    # lockout lasting LOCKOUT_SECONDS. The lockout is longer than the window on
+    # purpose — otherwise waiting for the window to slide would be enough, and
+    # the limit would cap the guess rate rather than the number of guesses.
     LOGIN_MAX_ATTEMPTS: int = 8
     LOGIN_WINDOW_SECONDS: int = 300
     LOGIN_LOCKOUT_SECONDS: int = 900

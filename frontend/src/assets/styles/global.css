@@ -85,7 +85,8 @@ html, body, #app {
 }
 .btn-block { width: 100%; }
 
-/* Filled variants use the -strong tokens: white text on --accent is 2.4:1. */
+/* Filled variants use the -strong tokens: white on --accent measures 2.90:1,
+   under the 4.5:1 floor. See variables.css for the full set of ratios. */
 .btn-primary { background: var(--accent-strong); color: #fff; }
 .btn-primary:hover:not(:disabled) { background: var(--accent-strong-hover); color: #fff; }
 .btn-primary:disabled { background: var(--bg); }
