@@ -2,7 +2,7 @@
   <div class="login-wrapper">
     <div ref="cardEl" class="login-card nm-raised">
       <h1 class="title">147ai TestLab</h1>
-      <p class="subtitle text-muted">登录或注册</p>
+      <p class="subtitle text-muted">请登录</p>
 
       <n-form ref="formRef" :model="form" :rules="rules" class="login-form">
         <n-form-item path="username" :show-label="false">
@@ -53,7 +53,13 @@ const loading = ref(false)
 const formRef = ref()
 const cardEl = ref<HTMLElement | null>(null)
 
-onMounted(() => fadeInUp(cardEl.value, { distance: 16 }))
+onMounted(() => {
+  // Reaching this page means re-authenticating. Drop any persisted session so
+  // the form is the only way in — otherwise a leftover token would carry the
+  // user into the shell without their input ever being checked.
+  auth.logout()
+  fadeInUp(cardEl.value, { distance: 16 })
+})
 
 const rules = {
   username: { required: true, message: '请输入用户名', trigger: 'blur' },
@@ -61,6 +67,12 @@ const rules = {
 }
 
 async function handleLogin() {
+  // Validate required fields before hitting the network.
+  try {
+    await formRef.value?.validate()
+  } catch {
+    return
+  }
   loading.value = true
   try {
     await auth.login(form.value.username, form.value.password)
@@ -74,18 +86,11 @@ async function handleLogin() {
   }
 }
 
-async function handleRegister() {
-  loading.value = true
-  try {
-    await auth.register(form.value.username, form.value.password)
-    message.success('注册成功，已自动登录')
-    router.push('/')
-  } catch (e: any) {
-    nudge(cardEl.value)
-    message.error(e?.response?.data?.detail || '注册失败')
-  } finally {
-    loading.value = false
-  }
+/** Registration is closed for now. The button is kept so its absence does not
+ *  read as a broken layout, but it only explains why it does nothing — the
+ *  backend /auth/register route is also disabled, so this is not the only guard. */
+function handleRegister() {
+  message.info('暂未开放注册功能，请用账号登录')
 }
 </script>
 

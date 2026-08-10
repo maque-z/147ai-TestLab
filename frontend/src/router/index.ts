@@ -30,14 +30,26 @@ const router = createRouter({
   ]
 })
 
-router.beforeEach((to) => {
+// Run once per page load, not on every navigation. The token is validated
+// against the backend so a forged or expired localStorage value is evicted
+// before the guard decides whether to redirect.
+let bootVerified = false
+
+router.beforeEach(async (to) => {
   const auth = useAuthStore()
+
+  if (!bootVerified) {
+    bootVerified = true
+    await auth.verify()
+  }
+
   if (to.meta.requiresAuth && !auth.isLoggedIn) {
     return { name: 'login' }
   }
-  if (to.name === 'login' && auth.isLoggedIn) {
-    return { path: '/' }
-  }
+  // Deliberately no "already logged in → bounce to /" redirect here.
+  // Landing on the login page is treated as intent to re-authenticate: the view
+  // clears any lingering session on mount, so the form always reflects a real
+  // credential check instead of silently reusing a persisted token.
 })
 
 export default router
