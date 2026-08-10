@@ -409,4 +409,35 @@ async function copySummary() {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ===== Responsive ===== */
+/* Tablet: stack terminal above results */
+@media (max-width: 900px) {
+  .test-body {
+    flex-direction: column;
+  }
+  .terminal {
+    flex: none;
+    max-height: 220px;
+    min-height: 100px;
+  }
+  .results-col {
+    overflow-y: visible;
+  }
+}
+/* Phone: tighten header, allow wrapping */
+@media (max-width: 640px) {
+  .test-header {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .header-right {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .terminal {
+    max-height: 160px;
+  }
+}
 </style>

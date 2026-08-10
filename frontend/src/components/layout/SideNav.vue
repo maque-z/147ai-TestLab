@@ -177,4 +177,22 @@ onMounted(() => {
   box-shadow: inset 2px 2px 4px var(--shadow-dark), inset -2px -2px 4px var(--shadow-light);
 }
 .logout-icon { font-size: 14px; }
+
+/* ===== Mobile (≤ 640px): sidebar becomes a full-width overlay ===== */
+@media (max-width: 640px) {
+  /* Override the desktop icon-only width so the sidebar is always full-width
+     on mobile; visibility is controlled entirely by translateX. */
+  .sidebar {
+    width: var(--sidebar-w) !important;
+    transition: transform 0.25s ease;
+    /* Hidden by default: sits off-screen to the left */
+    transform: translateX(-100%);
+  }
+  .sidebar:not(.collapsed) {
+    /* Tap the hamburger → collapsed becomes false → sidebar slides in */
+    transform: translateX(0);
+    /* Cast a shadow over the content area behind it */
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.22);
+  }
+}
 </style>

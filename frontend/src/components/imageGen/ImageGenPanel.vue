@@ -116,7 +116,9 @@
               @click="store.matrix.sizes = []"
             >清空</button>
           </div>
-          <table class="size-table">
+          <!-- Scrollable wrapper so the table does not overflow on narrow screens -->
+          <div class="size-table-scroll">
+            <table class="size-table">
             <thead>
               <tr>
                 <th class="ratio-th">比例</th>
@@ -140,6 +142,7 @@
               </tr>
             </tbody>
           </table>
+          </div><!-- /.size-table-scroll -->
         </div>
 
         <!-- Chip groups. Nothing selected == send nothing and let the API pick
@@ -819,6 +822,10 @@ function fmtFullTime(ts: number) {
 }
 
 /* ===== Size table ===== */
+.size-table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
 .size-table {
   border-collapse: separate;
   border-spacing: 4px;
@@ -1047,4 +1054,16 @@ function fmtFullTime(ts: number) {
 /* The test panel stretches to fill whatever the outer column gives it.
    min-height keeps the terminal readable even when there are no results yet. */
 .test-panel-wrapper { min-height: 600px; }
+
+/* ===== Responsive ===== */
+@media (max-width: 640px) {
+  .config-card { padding: 10px 12px; }
+  /* Tighter card grid on phones — one column is fine */
+  .results-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+  /* Allow test panel to be auto-height on mobile rather than a fixed min */
+  .test-panel-wrapper { min-height: 0; }
+  /* meta-row3 col widths: give the label a bit less room */
+  .meta-head,
+  .meta-row3 { grid-template-columns: auto 1fr auto; gap: 4px; }
+}
 </style>

@@ -6,9 +6,15 @@
       @toggle="collapsed = !collapsed"
       @logout="handleLogout"
     />
+    <!-- Backdrop: visible on mobile only when sidebar is open; tap to close -->
+    <div class="sidebar-backdrop" :class="{ active: !collapsed }" @click="collapsed = true" />
     <div class="layout-main" :class="{ 'sidebar-collapsed': collapsed }">
       <header class="topbar nm-raised">
-        <span class="topbar-title">{{ currentTitle }}</span>
+        <div class="topbar-left">
+          <!-- Hamburger: only visible on mobile via CSS; opens the sidebar overlay -->
+          <button class="hamburger btn" @click="collapsed = false" aria-label="打开菜单">☰</button>
+          <span class="topbar-title">{{ currentTitle }}</span>
+        </div>
         <!-- Route-scoped: both controls act on the image-gen view only -->
         <div v-if="route.name === 'image-gen'" class="topbar-right">
           <button class="btn" @click="imageGen.configOpen = true">
@@ -62,7 +68,8 @@ const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 const imageGen = useImageGenStore()
-const collapsed = ref(false)
+// On mobile the sidebar starts hidden; on desktop it starts expanded.
+const collapsed = ref(typeof window !== 'undefined' && window.innerWidth <= 640)
 
 const titleMap: Record<string, string> = {
   'image-gen': 'GPT Image 生成'
@@ -78,6 +85,15 @@ function handleLogout() {
 
 <style scoped>
 .layout-root { display: flex; height: 100vh; overflow: hidden; }
+
+/* Backdrop: hidden on desktop; on mobile it covers the page behind the open sidebar */
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 99;
+}
 
 .layout-main {
   flex: 1;
@@ -101,8 +117,12 @@ function handleLogout() {
   z-index: 10;
 }
 
+.topbar-left  { display: flex; align-items: center; gap: 10px; }
 .topbar-title { font-weight: 600; font-size: 15px; }
-.topbar-right  { display: flex; align-items: center; gap: 12px; }
+.topbar-right { display: flex; align-items: center; gap: 12px; }
+
+/* Hidden on desktop; shown on mobile as a sidebar trigger */
+.hamburger { display: none; width: 36px; height: 36px; padding: 0; font-size: 18px; }
 
 .btn-icon { font-size: 14px; }
 /* Tabular so the progress counter does not jitter as the digits change */
@@ -112,5 +132,16 @@ function handleLogout() {
   flex: 1;
   overflow-y: auto;
   padding: 24px;
+}
+
+/* ===== Mobile (≤ 640px) ===== */
+@media (max-width: 640px) {
+  /* Sidebar is an overlay on mobile — main content fills the full width */
+  .layout-main        { margin-left: 0 !important; }
+  .topbar             { padding: 0 14px; height: 50px; }
+  .topbar-title       { font-size: 13px; }
+  .content-area       { padding: 12px; }
+  .hamburger          { display: flex; }
+  .sidebar-backdrop.active { display: block; }
 }
 </style>

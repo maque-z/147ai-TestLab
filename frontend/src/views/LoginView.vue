@@ -156,12 +156,13 @@ function handleRegister() {
   transition: all 0.15s ease;
 }
 
+/* --accent on white is 2.90:1; --accent-strong is 5.20:1 and passes WCAG AA. */
 .login-btn {
-  background: var(--accent);
+  background: var(--accent-strong);
   color: #fff;
   box-shadow: 4px 4px 8px var(--shadow-dark), -2px -2px 6px var(--shadow-light);
 }
 
-.login-btn:hover { background: var(--accent-hover); }
+.login-btn:hover { background: var(--accent-strong-hover); }
 .login-btn:disabled, .register-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 </style>
