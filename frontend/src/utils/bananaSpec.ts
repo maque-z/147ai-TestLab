@@ -135,13 +135,17 @@ export function effectiveSize(model: string, size: string | undefined): string {
   // A case variant of a supported value. The doc says these are ignored and fall
   // back to 1K, but 2026-08-11 testing against api.147ai.cn found "2k" honoured
   // as 2K (1:1 → 2048×2048, reproduced twice). Since the observed behaviour
-  // contradicts the doc, treat the case variant as its canonical value: that
-  // predicts what actually comes back, and the case-sensitivity claim is
-  // reported separately by the card rather than baked in here.
+  // contradicts the doc, treat any case variant as its canonical value: that
+  // predicts what actually came back for the one variant that was measured, and
+  // the case-sensitivity claim is reported by the card rather than baked in here.
+  //
+  // Only "2k" was tested. The other variants ("1k", "4k") are extrapolated from
+  // it — if the gateway turns out to treat them differently, the card will show
+  // the mismatch rather than hiding it, which is the failure mode to prefer.
   const canonical = IMAGE_SIZES.find(
-    s => s.value.toUpperCase() === size.toUpperCase() && s.models !== undefined,
+    s => s.value.toUpperCase() === size.toUpperCase() && s.value !== size,
   )
-  if (canonical && canonical.value !== size && sizeSupported(model, canonical.value)) {
+  if (canonical && sizeSupported(model, canonical.value)) {
     return canonical.value
   }
 
