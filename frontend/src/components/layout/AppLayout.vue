@@ -64,7 +64,7 @@
             class="btn btn-lg btn-primary"
             :disabled="!bananaGen.canRun"
             :title="bananaGen.blockReason || '点击开始生成，可与进行中的批次并发'"
-            @click="bananaGen.run()"
+            @click="confirmBananaRun"
           >
             <template v-if="bananaGen.generating">
               <n-spin :size="13" stroke="#fff" />
@@ -97,11 +97,11 @@
         <div class="confirm-body">
           <div class="confirm-row">
             <span>上游请求</span>
-            <b>{{ imageGen.totalRequests }} 个</b>
+            <b>{{ confirmTarget.totalRequests }} 个</b>
           </div>
           <div class="confirm-row">
             <span>出图</span>
-            <b>{{ imageGen.totalImages }} 张</b>
+            <b>{{ confirmTarget.totalImages }} 张</b>
           </div>
           <p class="confirm-note">
             计费按上游请求数算。已经发出的请求点「停止」也退不回来，停止只拦得住还在排队的部分。
@@ -148,12 +148,29 @@ const CONFIRM_AT = 10
 
 const confirmOpen = ref(false)
 
+/** Which module the open dialog is about. Both surfaces bill per upstream
+ *  request, so both go through this gate — and the dialog has to show the counts
+ *  for the one that was actually clicked. */
+const confirmMode = ref<'image' | 'banana'>('image')
+const confirmTarget = computed(() =>
+  confirmMode.value === 'banana' ? bananaGen : imageGen
+)
+
 /** Gate run() behind a confirmation once the batch is large enough to be worth
  *  money. Counted in images to match the number printed on the button — that is
  *  what the user just looked at when they decided to click. */
 function confirmRun() {
+  confirmMode.value = 'image'
   if (imageGen.totalImages >= CONFIRM_AT) confirmOpen.value = true
   else imageGen.run()
+}
+
+/** Same gate for the Gemini surface: a full model × ratio × size matrix is a few
+ *  clicks away from hundreds of billed requests. */
+function confirmBananaRun() {
+  confirmMode.value = 'banana'
+  if (bananaGen.totalImages >= CONFIRM_AT) confirmOpen.value = true
+  else bananaGen.run()
 }
 
 /** Deliberately does not return run()'s promise. Naive UI keeps a dialog open
@@ -162,7 +179,8 @@ function confirmRun() {
  *  block the UI behind the modal for the whole run. Do not shorten this to
  *  `@positive-click="imageGen.run"`. */
 function runConfirmed() {
-  imageGen.run()
+  if (confirmMode.value === 'banana') bananaGen.run()
+  else imageGen.run()
 }
 
 function handleLogout() {
