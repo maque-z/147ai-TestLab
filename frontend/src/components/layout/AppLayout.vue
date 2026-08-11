@@ -35,7 +35,7 @@
             class="btn btn-lg btn-primary"
             :disabled="!imageGen.canRun"
             :title="imageGen.blockReason || '点击开始生成，可与进行中的批次并发'"
-            @click="imageGen.run()"
+            @click="confirmRun"
           >
             <template v-if="imageGen.generating">
               <n-spin :size="13" stroke="#fff" />
@@ -49,6 +49,37 @@
           </button>
         </div>
       </header>
+
+      <!--
+        Cost gate. A batch is billed per upstream request, and 全选 尺寸 is a
+        single click away from 270 of them — so anything past a handful gets
+        confirmed before it goes out. Requests already sent cannot be un-billed,
+        which is why this sits in front of run() rather than relying on 停止.
+      -->
+      <n-modal
+        v-model:show="confirmOpen"
+        preset="dialog"
+        type="warning"
+        title="确认发送这批请求"
+        positive-text="确认发送"
+        negative-text="取消"
+        @positive-click="runConfirmed"
+      >
+        <div class="confirm-body">
+          <div class="confirm-row">
+            <span>上游请求</span>
+            <b>{{ imageGen.totalRequests }} 个</b>
+          </div>
+          <div class="confirm-row">
+            <span>出图</span>
+            <b>{{ imageGen.totalImages }} 张</b>
+          </div>
+          <p class="confirm-note">
+            计费按上游请求数算。已经发出的请求点「停止」也退不回来，停止只拦得住还在排队的部分。
+          </p>
+        </div>
+      </n-modal>
+
       <main class="content-area">
         <router-view />
       </main>
@@ -59,7 +90,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { NSpin } from 'naive-ui'
+import { NSpin, NModal } from 'naive-ui'
 import { useAuthStore } from '@/stores/auth'
 import { useImageGenStore } from '@/stores/imageGen'
 import { useApiTestStore } from '@/stores/apiTest'
@@ -78,6 +109,29 @@ const titleMap: Record<string, string> = {
 }
 
 const currentTitle = computed(() => titleMap[route.name as string] ?? '147ai TestLab')
+
+/** Batches at or above this many images ask first. Below it the run is small
+ *  enough that a confirmation would just be a click to dismiss. */
+const CONFIRM_AT = 10
+
+const confirmOpen = ref(false)
+
+/** Gate run() behind a confirmation once the batch is large enough to be worth
+ *  money. Counted in images to match the number printed on the button — that is
+ *  what the user just looked at when they decided to click. */
+function confirmRun() {
+  if (imageGen.totalImages >= CONFIRM_AT) confirmOpen.value = true
+  else imageGen.run()
+}
+
+/** Deliberately does not return run()'s promise. Naive UI keeps a dialog open
+ *  with the confirm button spinning until a returned promise settles — and that
+ *  promise only settles when the entire batch is done, so returning it would
+ *  block the UI behind the modal for the whole run. Do not shorten this to
+ *  `@positive-click="imageGen.run"`. */
+function runConfirmed() {
+  imageGen.run()
+}
 
 function handleLogout() {
   // Abort in-flight work before dropping the token. Otherwise every queued
@@ -138,6 +192,21 @@ function handleLogout() {
 .btn-icon { font-size: 14px; }
 /* Tabular so the progress counter does not jitter as the digits change */
 .run-count { font-variant-numeric: tabular-nums; }
+
+/* Counts are the point of the dialog, so they get the mono treatment the rest
+   of the parameter tables use. */
+.confirm-body { display: flex; flex-direction: column; gap: 6px; }
+.confirm-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 13px; color: var(--text-muted);
+}
+.confirm-row b {
+  font-variant-numeric: tabular-nums;
+  font-size: 16px; color: var(--text-primary); font-weight: 600;
+}
+.confirm-note {
+  margin: 6px 0 0; font-size: 12px; line-height: 1.6; color: var(--text-primary);
+}
 
 .content-area {
   flex: 1;
