@@ -54,7 +54,8 @@ const navEl = ref<HTMLElement | null>(null)
 const footerEl = ref<HTMLElement | null>(null)
 
 const navItems = [
-  { to: '/image-gen', icon: '🖼️', label: 'GPT Image 生成' }
+  { to: '/image-gen', icon: '🖼️', label: 'GPT Image 生成' },
+  { to: '/banana-gen', icon: '🍌', label: 'Gemini 图片生成' }
 ]
 
 function onToggle(e: MouseEvent) {

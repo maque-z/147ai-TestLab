@@ -18,44 +18,53 @@ logger = logging.getLogger(__name__)
 
 
 def ensure_schema() -> None:
-    """Apply the UNIQUE(user_id) on user_image_configs to pre-existing databases.
+    """Backfill the UNIQUE(user_id) constraint on the per-user config tables.
 
     create_all only creates missing tables; it never alters one that already
     exists. Without this, the constraint declared on the model would silently
-    apply to fresh databases only.
+    apply to fresh databases only. Only user_image_configs actually needs the
+    backfill — it predates the constraint — but the loop covers both so a table
+    added later is not quietly left out.
 
     Any duplicate rows are collapsed first, keeping the highest id — that is the
     most recently inserted, so a config the user saved after the duplicate
     appeared is the one that survives. Rows are only ever deleted when a genuine
     duplicate exists; the single-row case does nothing.
     """
+    for table in ("user_image_configs", "user_banana_configs"):
+        _ensure_unique_user_id(table)
+
+
+def _ensure_unique_user_id(table: str) -> None:
+    # `table` is a module constant, never user input. Identifiers cannot be bound
+    # parameters, so interpolation is the only option — and is safe here.
     with engine.begin() as conn:
         if not conn.exec_driver_sql(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_image_configs'"
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
         ).first():
             return  # fresh database; create_all already built it with the constraint
 
         already = conn.exec_driver_sql(
-            "SELECT 1 FROM pragma_index_list('user_image_configs') WHERE \"unique\" = 1"
+            f"""SELECT 1 FROM pragma_index_list('{table}') WHERE "unique" = 1"""
         ).first()
         if already:
             return
 
         removed = conn.exec_driver_sql(
-            "DELETE FROM user_image_configs WHERE id NOT IN "
-            "(SELECT MAX(id) FROM user_image_configs GROUP BY user_id)"
+            f"DELETE FROM {table} WHERE id NOT IN "
+            f"(SELECT MAX(id) FROM {table} GROUP BY user_id)"
         ).rowcount
         if removed:
             logger.warning(
-                "Collapsed %d duplicate image-config row(s), keeping the newest per user.",
-                removed,
+                "Collapsed %d duplicate row(s) in %s, keeping the newest per user.",
+                removed, table,
             )
 
         conn.execute(text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS ux_user_image_configs_user_id "
-            "ON user_image_configs (user_id)"
+            f"CREATE UNIQUE INDEX IF NOT EXISTS ux_{table}_user_id "
+            f"ON {table} (user_id)"
         ))
-        logger.info("Applied UNIQUE(user_id) to user_image_configs.")
+        logger.info("Applied UNIQUE(user_id) to %s.", table)
 
 
 def seed_default_user() -> None:

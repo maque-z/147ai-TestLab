@@ -1,3 +1,7 @@
+// Gemini image surfaces live in their own file — different request and response
+// shapes entirely — but re-exported so `@/types` stays the single import path.
+export * from './banana'
+
 export interface User {
   id: number
   username: string

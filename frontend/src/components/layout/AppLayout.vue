@@ -48,6 +48,35 @@
             </template>
           </button>
         </div>
+
+        <!-- Route-scoped, same arrangement as the image-gen controls above: the
+             two modules keep separate configs and separate batches, so neither
+             button may act on the other's state. -->
+        <div v-else-if="route.name === 'banana-gen'" class="topbar-right">
+          <button class="btn" @click="bananaGen.configOpen = true">
+            <span class="btn-icon">⚙️</span> 配置
+          </button>
+
+          <!-- Never turns into a stop button. Stopping is per-card, on the card,
+               so the two actions cannot be confused for one another. While a
+               batch runs this shows its progress instead. -->
+          <button
+            class="btn btn-lg btn-primary"
+            :disabled="!bananaGen.canRun"
+            :title="bananaGen.blockReason || '点击开始生成，可与进行中的批次并发'"
+            @click="bananaGen.run()"
+          >
+            <template v-if="bananaGen.generating">
+              <n-spin :size="13" stroke="#fff" />
+              <span class="run-count">{{ bananaGen.doneCount }} / {{ bananaGen.totalCount }}</span>
+            </template>
+            <template v-else>
+              <span class="btn-icon">✨</span>
+              生成
+              <span class="run-count">{{ bananaGen.totalImages }}</span> 张
+            </template>
+          </button>
+        </div>
       </header>
 
       <!--
@@ -94,6 +123,7 @@ import { NSpin, NModal } from 'naive-ui'
 import { useAuthStore } from '@/stores/auth'
 import { useImageGenStore } from '@/stores/imageGen'
 import { useApiTestStore } from '@/stores/apiTest'
+import { useBananaGenStore } from '@/stores/bananaGen'
 import SideNav from './SideNav.vue'
 
 const router = useRouter()
@@ -101,11 +131,13 @@ const route = useRoute()
 const auth = useAuthStore()
 const imageGen = useImageGenStore()
 const apiTest = useApiTestStore()
+const bananaGen = useBananaGenStore()
 // On mobile the sidebar starts hidden; on desktop it starts expanded.
 const collapsed = ref(typeof window !== 'undefined' && window.innerWidth <= 640)
 
 const titleMap: Record<string, string> = {
-  'image-gen': 'GPT Image 生成'
+  'image-gen': 'GPT Image 生成',
+  'banana-gen': 'Gemini 图片生成'
 }
 
 const currentTitle = computed(() => titleMap[route.name as string] ?? '147ai TestLab')
@@ -143,6 +175,7 @@ function handleLogout() {
   // interceptors, and closing that loop makes module init order load-bearing.
   imageGen.stop()
   apiTest.stop()
+  bananaGen.stop()
   auth.logout()
   router.push('/login')
 }

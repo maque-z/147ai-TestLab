@@ -31,3 +31,30 @@ class UserImageConfig(Base):
     model_id = Column(String(100), default="gpt-image-2")
     timeout = Column(Integer, default=480)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class UserBananaConfig(Base):
+    """Connection settings for the Gemini image endpoints.
+
+    A separate table rather than a column added to UserImageConfig, for two
+    reasons. The model id means something different on each side — here it is the
+    request *path* (`/v1beta/models/{model}:generateContent`), and the batch
+    matrix varies it per request, so the stored value is only the default the
+    drawer opens with. And the two surfaces can sit behind different gateway
+    groups, so baseurl and key have to be settable independently.
+    """
+
+    __tablename__ = "user_banana_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # unique for the same reason as user_image_configs above: get_banana_config is
+    # a read-then-insert and the frontend fires its matrix concurrently.
+    user_id = Column(Integer, nullable=False, index=True, unique=True)
+    baseurl = Column(String(500), default="")
+    api_key = Column(String(500), default="")
+    # Highest-quality model in the official list, and the only one that documents
+    # 2K/4K support — the most useful default for a lab that exists to check
+    # whether the documented sizes actually come back.
+    model_id = Column(String(100), default="gemini-3-pro-image-preview")
+    timeout = Column(Integer, default=480)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

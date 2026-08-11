@@ -1,0 +1,6 @@
+# pnpm 11 blocks dependency lifecycle scripts unless they are named here.
+# Both need theirs: esbuild's postinstall places its native binary and
+# vue-demi's writes the Vue compatibility shim used by the UI dependencies.
+allowBuilds:
+  esbuild: true
+  vue-demi: true

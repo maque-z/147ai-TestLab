@@ -23,6 +23,11 @@ const router = createRouter({
           path: 'image-gen',
           name: 'image-gen',
           component: () => import('@/views/ImageGenView.vue')
+        },
+        {
+          path: 'banana-gen',
+          name: 'banana-gen',
+          component: () => import('@/views/BananaGenView.vue')
         }
       ]
     },

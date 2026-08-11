@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import auth, image_gen
+from .api import auth, banana_gen, image_gen
 from .core.bootstrap import ensure_schema, seed_default_user
 from .core.config import settings
 from .core.database import Base, engine
@@ -50,6 +50,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(image_gen.router, prefix="/api/v1")
+app.include_router(banana_gen.router, prefix="/api/v1")
 
 logging.getLogger(__name__).info(
     "CORS allows %d origin(s): %s",
