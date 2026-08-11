@@ -19,6 +19,9 @@ services:
     environment:
       - DATABASE_URL=sqlite:////app/data/lab.db
       - SECRET_KEY=${SECRET_KEY}
+      # Used only to seed a fresh database; ignored once the account exists.
+      - DEFAULT_USERNAME=${DEFAULT_USERNAME:-147ai}
+      - DEFAULT_PASSWORD=${DEFAULT_PASSWORD}
     volumes:
       - db-data:/app/data
     healthcheck:

@@ -70,8 +70,9 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
     DATABASE_URL: str = "sqlite:///./data/lab.db"
 
-    # Seeded on startup when absent. Registration is closed, so without this
-    # there would be no way into a fresh deployment.
+    # Seeded only when the account is absent. The password has deliberately no
+    # source-code default: set DEFAULT_PASSWORD in .env for a fresh deployment.
+    # Once the account exists this value is ignored, so restarts never reset it.
     DEFAULT_USERNAME: str = "147ai"
     DEFAULT_PASSWORD: str = ""
 

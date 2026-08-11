@@ -67,6 +67,12 @@ def seed_default_user() -> None:
                         settings.DEFAULT_USERNAME)
             return
 
+        if not settings.DEFAULT_PASSWORD:
+            raise RuntimeError(
+                "DEFAULT_PASSWORD is required when seeding a fresh database. "
+                "Set it in .env; it is ignored after the account exists."
+            )
+
         user_crud.create_user(db, UserCreate(
             username=settings.DEFAULT_USERNAME,
             password=settings.DEFAULT_PASSWORD,
