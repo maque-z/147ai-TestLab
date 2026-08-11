@@ -11,7 +11,7 @@ cd "$ROOT_DIR"
 
 # 宿主机端口，与 docker-compose.yml 的 BACKEND_PORT 保持一致
 BACKEND_PORT="$(grep -E '^BACKEND_PORT=' .env 2>/dev/null | cut -d= -f2- || true)"
-BACKEND_PORT="${BACKEND_PORT:-8000}"
+BACKEND_PORT="${BACKEND_PORT:-8005}"
 
 # docker compose (v2) 与 docker-compose (v1) 都支持
 if docker compose version >/dev/null 2>&1; then
