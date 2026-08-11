@@ -2,20 +2,25 @@
 # 宝塔 Nginx 负责: HTTPS证书、前端静态文件、/api/ 反向代理
 #
 # 宝塔操作步骤:
-#   1. 克隆项目到服务器，cd frontend && npm i && npm run build
-#   2. docker-compose up -d --build
-#   3. 宝塔 → 网站 → 添加站点 → 根目录指向 frontend/dist
-#   4. 网站设置 → 反向代理 → 添加:
-#      代理名称: api  目标URL: http://127.0.0.1:8000  发送域名: $host
-#      代理目录: /api/
-#   5. 宝塔申请 SSL 证书
+#   1. 克隆项目到服务器，复制 .env.example 为 .env 并填写 SECRET_KEY / DEFAULT_PASSWORD
+#   2. bash scripts/deploy.sh   (构建前端 + 启动容器 + 修权限)
+#   3. 宝塔 → 网站 → 添加站点(HTML项目) → 根目录指向 frontend/dist
+#   4. 站点 → 伪静态，填入:
+#        location / { try_files $uri $uri/ /index.html; }
+#      站点 → 配置文件，在 server{} 内加入 nginx/baota-snippet.conf 里的 /api/ 段
+#      两处不要都写 location /api/，否则 nginx 报 duplicate location 拒绝重载
+#   5. 宝塔申请 SSL 证书 (需 dist 里已有构建产物，否则 HTTP-01 验证失败)
 
 services:
   fastapi:
     build: ./backend
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8000:8000"   # 只绑定 localhost，不直接对外暴露
+      # 只绑定 localhost，不直接对外暴露；公网访问一律经宝塔 Nginx 反代。
+      # 宿主机端口用 BACKEND_PORT 覆盖（写在根目录 .env），默认 8000。
+      # 端口被占时改 .env 即可，不用动这个被 git 跟踪的文件——否则每次 pull 都冲突。
+      # 改完记得同步宝塔反代里的 proxy_pass 端口。
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
     environment:
       - DATABASE_URL=sqlite:////app/data/lab.db
       - SECRET_KEY=${SECRET_KEY}
