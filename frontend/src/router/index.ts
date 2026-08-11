@@ -33,15 +33,18 @@ const router = createRouter({
 // Run once per page load, not on every navigation. The token is validated
 // against the backend so a forged or expired localStorage value is evicted
 // before the guard decides whether to redirect.
-let bootVerified = false
+//
+// Memoised as a promise rather than a boolean: a boolean flipped before the
+// await would let a navigation started while verify() is still in flight skip
+// the wait entirely and read a half-populated auth state. Every concurrent
+// navigation awaits the same request instead.
+let bootPromise: Promise<void> | null = null
 
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
 
-  if (!bootVerified) {
-    bootVerified = true
-    await auth.verify()
-  }
+  bootPromise ??= auth.verify()
+  await bootPromise
 
   if (to.meta.requiresAuth && !auth.isLoggedIn) {
     return { name: 'login' }

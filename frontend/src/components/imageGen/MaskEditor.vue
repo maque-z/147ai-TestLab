@@ -97,7 +97,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, nextTick, onBeforeUnmount, markRaw } from 'vue'
 import type { RefImage } from '@/types'
 
 const props = defineProps<{ image: RefImage | null }>()
@@ -116,6 +116,11 @@ const mode = ref<'brush' | 'import'>('brush')
 const enabled = ref(true)
 const erasing = ref(false)
 const brush = ref(48)
+/** Strokes are pushed with markRaw (see onDown), so the array stays reactive —
+ *  which is what the undo button's :disabled reads — while each stroke's points
+ *  array does not become a proxy. onMove appends a point per pointer sample, and
+ *  proxying those would add dependency bookkeeping to every sample for data the
+ *  template never reads. */
 const strokes = ref<Stroke[]>([])
 const imported = ref<ImageData | null>(null)
 const importError = ref('')
@@ -238,7 +243,9 @@ function onDown(e: PointerEvent) {
   ;(e.target as HTMLElement).setPointerCapture?.(e.pointerId)
   // Brush size is in canvas pixels, so it stays consistent across zoom levels.
   const scale = canvasEl.value!.width / (canvasEl.value!.getBoundingClientRect().width || 1)
-  strokes.value.push({ points: [p], size: brush.value * scale, erase: erasing.value })
+  // markRaw: onMove pushes a point per pointer sample into this stroke, and none
+  // of that is read by the template — only strokes.length is.
+  strokes.value.push(markRaw({ points: [p], size: brush.value * scale, erase: erasing.value }))
   const ctx = ctxOf()
   if (ctx) drawStroke(ctx, strokes.value[strokes.value.length - 1])
   scheduleEmit()

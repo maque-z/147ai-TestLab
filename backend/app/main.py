@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api import auth, image_gen
-from .core.bootstrap import seed_default_user
+from .core.bootstrap import ensure_schema, seed_default_user
 from .core.config import settings
 from .core.database import Base, engine
 
@@ -16,6 +16,10 @@ logging.basicConfig(
 # Models are registered on Base.metadata by the router imports above, so this
 # sees every table. Must run before seeding, which writes to `users`.
 Base.metadata.create_all(bind=engine)
+
+# create_all never alters a table that already exists, so constraints added to a
+# model after a database was created need backfilling. Idempotent.
+ensure_schema()
 
 # Registration is closed, so without this a fresh database would have no way in.
 # Idempotent: an existing account is never touched.

@@ -199,9 +199,12 @@
           </div>
           <div class="field">
             <div class="field-label">压缩质量 <span class="text-muted" style="font-weight:400">jpeg/webp</span></div>
+            <!-- min 0, not 1: the compatibility suite probes 0 as its
+                 smallest-file control case, so the matrix has to be able to
+                 reproduce what the report claims to have verified. -->
             <n-input-number
               v-model:value="store.matrix.output_compression"
-              :min="1" :max="100" size="small" style="width:100%"
+              :min="0" :max="100" size="small" style="width:100%"
               :placeholder="`默认 ${DEFAULTS.compression}`"
               clearable
               :disabled="!hasLossyFormat"
@@ -524,6 +527,14 @@ watch(() => visibleJobs.value.map(j => j.id).join(','), async () => {
     return true
   })
   enterCards(fresh)
+
+  // Drop ids the pool has since evicted. Without this the Set keeps one entry per
+  // job ever rendered, while the pool itself is capped at 50 — ids are only ever
+  // increasing, so an evicted one can never come back and be re-animated.
+  if (animatedJobs.size > visibleJobs.value.length) {
+    const live = new Set(visibleJobs.value.map(j => j.id))
+    animatedJobs.forEach(id => { if (!live.has(id)) animatedJobs.delete(id) })
+  }
 })
 
 /** The image the card is currently showing, or undefined before any arrive. */

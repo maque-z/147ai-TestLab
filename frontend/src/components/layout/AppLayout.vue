@@ -62,12 +62,14 @@ import { useRouter, useRoute } from 'vue-router'
 import { NSpin } from 'naive-ui'
 import { useAuthStore } from '@/stores/auth'
 import { useImageGenStore } from '@/stores/imageGen'
+import { useApiTestStore } from '@/stores/apiTest'
 import SideNav from './SideNav.vue'
 
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 const imageGen = useImageGenStore()
+const apiTest = useApiTestStore()
 // On mobile the sidebar starts hidden; on desktop it starts expanded.
 const collapsed = ref(typeof window !== 'undefined' && window.innerWidth <= 640)
 
@@ -78,6 +80,15 @@ const titleMap: Record<string, string> = {
 const currentTitle = computed(() => titleMap[route.name as string] ?? '147ai TestLab')
 
 function handleLogout() {
+  // Abort in-flight work before dropping the token. Otherwise every queued
+  // request fires against a cleared session, comes back 401, and re-enters the
+  // 401 interceptor — one pointless round trip per remaining card.
+  //
+  // Done here rather than inside auth.logout(): the auth store cannot import
+  // these two, because api/imageGen.ts already imports the auth store for its
+  // interceptors, and closing that loop makes module init order load-bearing.
+  imageGen.stop()
+  apiTest.stop()
   auth.logout()
   router.push('/login')
 }

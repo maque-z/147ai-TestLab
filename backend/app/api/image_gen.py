@@ -233,6 +233,12 @@ def require_config(db: Session, user_id: int):
     cfg = user_crud.get_image_config(db, user_id)
     if not cfg.api_key:
         raise HTTPException(status_code=400, detail="请先在配置中填写 API Key")
+    # Defaults to "" so an unconfigured deploy fails here rather than silently
+    # sending test traffic somewhere. Without this check the empty string reaches
+    # httpx as a relative URL and surfaces as a 502 wrapping an internal
+    # exception string, which reads like the upstream is broken.
+    if not cfg.baseurl:
+        raise HTTPException(status_code=400, detail="请先在配置中填写 Base URL")
     return cfg
 
 
@@ -263,7 +269,10 @@ async def generate(
     payload: dict = {
         "model": cfg.model_id,
         "prompt": body.prompt,
-        "n": body.n if body.n is not None else 1,
+        # n omitted when unset, like every other optional param: substituting 1
+        # would report the API's default as though it had been requested, and
+        # whether the API defaults to 1 is one of the things worth observing.
+        **({"n": body.n} if body.n is not None else {}),
         **optional_params(
             size=body.size,
             quality=body.quality,
@@ -367,7 +376,8 @@ async def edit(
     payload: dict = {
         "model": cfg.model_id,
         "prompt": prompt,
-        "n": n if n is not None else 1,
+        # Omitted when unset — same reason as the generate endpoint.
+        **({"n": n} if n is not None else {}),
         **optional_params(
             size=size,
             quality=quality,
