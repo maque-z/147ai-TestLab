@@ -6,6 +6,12 @@
 # 幂等：重复执行安全。数据库在 docker volume 里，本脚本不会删除它。
 set -euo pipefail
 
+# 整个脚本体包在 { } 里，末尾 exit 0。
+# 因为下面会 git pull，而 pull 会改写本文件——bash 是边读边执行的，
+# 文件在运行中变长/变短会导致它从错误的偏移继续读，执行出乱码命令。
+# 包成一个复合命令后 bash 会先完整解析再执行，exit 0 保证不再回去读文件。
+{
+
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
@@ -46,7 +52,8 @@ else
 fi
 
 echo "==> 拉取最新代码..."
-git pull
+# 写死 origin main：服务器上如果是浅克隆或没设上游分支，裸 git pull 会直接报错
+git pull origin main
 
 echo "==> 构建前端..."
 cd frontend
@@ -92,3 +99,6 @@ echo "✅ 部署完成"
 $DC ps
 echo ""
 echo "浏览器请强制刷新 (Ctrl+Shift+R)，否则可能拿到缓存的旧页面"
+
+exit 0
+}   # <-- 闭合顶部的 {，勿删；见文件开头的说明

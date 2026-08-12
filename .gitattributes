@@ -1,0 +1,10 @@
+# Windows 上 core.autocrlf=true 会把 .sh 提交成 CRLF，
+# 服务器 checkout 后 shebang 变成 "#!/bin/bash\r"，报 bad interpreter: ^M。
+# 强制这些文件在任何平台都用 LF。
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# PowerShell 脚本只在 Windows 跑，保持 CRLF
+*.ps1 text eol=crlf
