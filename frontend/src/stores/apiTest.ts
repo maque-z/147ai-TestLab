@@ -67,17 +67,13 @@ function buildTestCases(): TestCase[] {
     })
   }
 
-  // ---- n: gpt-image-2 is documented as only returning 1 per call, so n=2
-  //  and n=4 test whether the gateway/model actually honours a higher count.
-  //  n=1 is the control. ----
-  for (const n of [1, 2, 4] as const) {
-    cases.push({
-      id: `n-${n}`,
-      label: `n = ${n}`,
-      dimension: 'n',
-      req: { n },
-    })
-  }
+  // ---- n: test whether the gateway actually returns 3 images when asked. ----
+  cases.push({
+    id: `n-3`,
+    label: `n = 3`,
+    dimension: 'n',
+    req: { n: 3, size: '1024x1024', quality: 'low' },
+  })
 
   // ---- edit endpoint: fixed prompt, no extra params ----
   cases.push({
@@ -91,7 +87,7 @@ function buildTestCases(): TestCase[] {
   return cases
 }
 
-// Total cases: 6 + 3 + 3 + 3 + 3 + 1 = 19
+// Total cases: 6 + 3 + 3 + 3 + 1 + 1 = 17
 export const TEST_CASE_COUNT = 19
 
 /** Cards are capped at this value for consistency with the generate/edit pools.
