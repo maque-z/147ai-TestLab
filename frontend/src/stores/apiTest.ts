@@ -320,7 +320,7 @@ export const useApiTestStore = defineStore('apiTest', () => {
         try {
           const req: GenerateRequest = c.isEdit
             ? { prompt: EDIT_PROMPT, ...c.req }
-            : { prompt: DEFAULT_PROMPT, ...c.req }
+            : { prompt: DEFAULT_PROMPT, quality: 'low', size: '1024x1024', ...c.req }
           let res: GenerateResponse
 
           if (c.isEdit) {
