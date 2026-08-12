@@ -88,11 +88,11 @@ function buildTestCases(): TestCase[] {
 }
 
 // Total cases: 6 + 3 + 3 + 3 + 1 + 1 = 17
-export const TEST_CASE_COUNT = 19
+export const TEST_CASE_COUNT = 17
 
 /** Cards are capped at this value for consistency with the generate/edit pools.
  *  In practice run() calls clear() first so this is a guard rather than a
- *  live eviction path — a single suite is only 19 cards. */
+ *  live eviction path — a single suite is only 17 cards. */
 const MAX_RESULTS = 50
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
@@ -105,7 +105,7 @@ function nowTs() {
 }
 
 /** Same off-thread decode as the imageGen store uses — see the note there. The
- *  suite fires all 19 probes at once, so a synchronous decode per response is
+ *  suite fires all 17 probes at once, so a synchronous decode per response is
  *  exactly the case that stalls the log from scrolling. */
 async function b64ToBlobUrl(b64: string, mime: string): Promise<string> {
   const resp = await fetch(`data:${mime};base64,${b64}`)
