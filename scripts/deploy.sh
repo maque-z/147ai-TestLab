@@ -57,7 +57,60 @@ git pull origin main
 
 echo "==> 构建前端..."
 cd frontend
-npm install --legacy-peer-deps
+
+# 必须用 pnpm：仓库里锁的是 pnpm-lock.yaml，没有 package-lock.json。
+# 之前这里跑 npm install --legacy-peer-deps，而 npm 读不了 pnpm 的 lockfile，
+# 等于每次部署都把所有间接依赖重新浮动解析一遍——本地和线上是两棵不同的依赖树。
+# 版本由 package.json 的 packageManager 字段钉住。
+
+# Node 18+：vite 5 和 pnpm 10 都要求它。先在这儿拦一道，
+# 否则报出来的是 pnpm 的 engine 错误或 vite 的语法错误，都不指向真正的原因。
+NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+if [ "$NODE_MAJOR" -lt 18 ]; then
+  echo "✗ 需要 Node 18 或更高版本，当前是 $(node -v 2>/dev/null || echo '未安装 node')"
+  echo "  宝塔: 软件商店 → Node.js 版本管理器 → 安装 18/20/22 并设为命令行版本"
+  exit 1
+fi
+
+# pnpm 的取得方式按可靠性排序。每一种都当场验证能不能真的跑起来，
+# 而不是只看命令存不存在——corepack 在旧 Node 上会因为签名 keyid 过期而失败，
+# 那种情况下 command -v 是成功的，真正执行才报错。
+PNPM=""
+if command -v pnpm >/dev/null 2>&1 && pnpm --version >/dev/null 2>&1; then
+  PNPM="pnpm"
+elif command -v corepack >/dev/null 2>&1; then
+  # Node 16.9+ 自带 corepack，它照 package.json 的 packageManager 字段拉对应版本
+  corepack enable >/dev/null 2>&1 || true
+  corepack prepare --activate >/dev/null 2>&1 || true
+  # enable 会把 pnpm shim 装进 PATH，优先用它；不行再退回 corepack 代理执行
+  if command -v pnpm >/dev/null 2>&1 && pnpm --version >/dev/null 2>&1; then
+    PNPM="pnpm"
+  elif corepack pnpm --version >/dev/null 2>&1; then
+    PNPM="corepack pnpm"
+  fi
+fi
+if [ -z "$PNPM" ]; then
+  echo "    未找到可用的 pnpm，全局装一个..."
+  npm install -g pnpm
+  command -v pnpm >/dev/null 2>&1 && pnpm --version >/dev/null 2>&1 || {
+    echo "✗ pnpm 安装后仍不可用，检查 npm 全局 bin 是否在 PATH 里:"
+    echo "    npm bin -g"
+    exit 1
+  }
+  PNPM="pnpm"
+fi
+echo "    包管理器: $PNPM $($PNPM --version)"
+
+# 历史上这台机器可能被 npm install 装过一棵扁平的 node_modules。
+# pnpm 不会去接管它，混着用会解析到意料之外的版本，所以先清掉。
+if [ -d node_modules ] && [ ! -d node_modules/.pnpm ]; then
+  echo "    检测到 npm 装出来的 node_modules，清除后改用 pnpm..."
+  rm -rf node_modules
+fi
+
+# --frozen-lockfile: lockfile 与 package.json 不一致时直接失败，
+# 而不是就地改写 lockfile——那样服务器就又开始自己解析依赖了。
+$PNPM install --frozen-lockfile
 
 # 宝塔建站时会往根目录放 .user.ini 并加 immutable 属性(chattr +i)，
 # 导致 Vite 清空 dist/ 时报 ENOTDIR 直接失败。这两个文件对纯静态站点无用。
@@ -67,7 +120,7 @@ if [ -e dist/.user.ini ]; then
 fi
 rm -f dist/.htaccess 2>/dev/null || true
 
-npm run build
+$PNPM build
 cd ..
 
 # 宝塔 nginx 以 www 用户运行，root 构建出的文件它读不了 → 403。

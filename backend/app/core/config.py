@@ -2,7 +2,7 @@ import logging
 import secrets
 from pathlib import Path
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,11 @@ def _resolve_secret_key(configured: str) -> str:
 
 
 class Settings(BaseSettings):
+    # SettingsConfigDict, not a nested `class Config`: the class-based form is
+    # deprecated in Pydantic V2 and removed in V3. Same behaviour — .env is still
+    # read, and env vars still win over it.
+    model_config = SettingsConfigDict(env_file=".env")
+
     SECRET_KEY: str = ""
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
@@ -87,9 +92,6 @@ class Settings(BaseSettings):
     # Browser origins allowed to call the API. Same-origin deployments (nginx
     # serving dist/ and proxying /api/) need no entry here.
     CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,http://127.0.0.1:8080"
-
-    class Config:
-        env_file = ".env"
 
     @property
     def cors_origin_list(self) -> list[str]:

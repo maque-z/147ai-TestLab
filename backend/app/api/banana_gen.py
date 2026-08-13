@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
-from ..core.deps import get_current_user
+from ..core.deps import UpstreamConfig, get_banana_config, get_current_user
 from ..core.imaging import b64_byte_size, detect_format, image_dimensions
 from ..crud import user as user_crud
 from ..schemas.banana_config import BananaConfigOut, BananaConfigUpdate
@@ -54,16 +54,7 @@ _FORBIDDEN_IN_MODEL = ("/", "\\", "?", "#", "..", " ")
 _DATA_URI_IN_TEXT = re.compile(r"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+")
 
 
-def require_config(db: Session, user_id: int):
-    cfg = user_crud.get_banana_config(db, user_id)
-    if not cfg.api_key:
-        raise HTTPException(status_code=400, detail="请先在配置中填写 API Key")
-    if not cfg.baseurl:
-        raise HTTPException(status_code=400, detail="请先在配置中填写 Base URL")
-    return cfg
-
-
-def resolve_model(requested: str | None, cfg) -> str:
+def resolve_model(requested: str | None, cfg: UpstreamConfig) -> str:
     """The model for this request: the matrix's choice, else the stored default."""
     model = (requested or cfg.model_id or "").strip()
     if not model:
@@ -77,7 +68,7 @@ def resolve_model(requested: str | None, cfg) -> str:
     return model
 
 
-async def call_upstream(cfg, path: str, payload: dict) -> tuple[dict, int, str | None]:
+async def call_upstream(cfg: UpstreamConfig, path: str, payload: dict) -> tuple[dict, int, str | None]:
     """POST JSON upstream and return (json, elapsed_ms, request_id).
 
     Every failure mode becomes an HTTPException carrying a message worth showing
@@ -356,11 +347,14 @@ def save_config(
 @router.post("/generate", response_model=BananaGenerateResponse)
 async def generate(
     body: BananaGenerateRequest,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    cfg: UpstreamConfig = Depends(get_banana_config),
 ):
-    """One combination against /v1beta/models/{model}:generateContent."""
-    cfg = require_config(db, current_user.id)
+    """One combination against /v1beta/models/{model}:generateContent.
+
+    No `db` dependency: the config arrives as a snapshot with its session already
+    closed, so no pooled connection is held across the upstream call. See
+    core/deps.py.
+    """
     model = resolve_model(body.model_id, cfg)
     payload = build_native_payload(body)
 
@@ -401,16 +395,16 @@ async def generate(
 @router.post("/chat", response_model=BananaGenerateResponse)
 async def chat(
     body: BananaChatRequest,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    cfg: UpstreamConfig = Depends(get_banana_config),
 ):
     """One combination against the OpenAI-compatible /v1/chat/completions.
 
     stream is deliberately never set: the documented example passes `true`, but a
     streamed body cannot be measured as a whole, and the byte size and magic-byte
     format of the result are the point of running this at all.
+
+    No `db` dependency, same as /generate — see core/deps.py.
     """
-    cfg = require_config(db, current_user.id)
     model = resolve_model(body.model_id, cfg)
 
     payload: dict = {

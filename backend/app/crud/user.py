@@ -2,12 +2,11 @@ from typing import Type, TypeVar
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from ..models.user import User, UserImageConfig, UserBananaConfig
+from ..models.user import User, UserImageConfig, UserBananaConfig, utcnow
 from ..schemas.user import UserCreate
 from ..schemas.image_config import ImageConfigUpdate
 from ..schemas.banana_config import BananaConfigUpdate
 from ..core.security import get_password_hash
-from datetime import datetime
 
 # Both config tables have the same shape (one row per user, UNIQUE(user_id)) and
 # the same two access patterns, so the get-or-create race handling below is
@@ -63,7 +62,7 @@ def _update_config(db: Session, cfg: ConfigT, cfg_in: BaseModel) -> ConfigT:
     # nothing for it.
     for field, value in cfg_in.model_dump(exclude_unset=True).items():
         setattr(cfg, field, value)
-    cfg.updated_at = datetime.utcnow()
+    cfg.updated_at = utcnow()
     db.commit()
     db.refresh(cfg)
     return cfg

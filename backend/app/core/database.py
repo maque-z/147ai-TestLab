@@ -1,15 +1,18 @@
 from sqlalchemy import create_engine, event
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+# From sqlalchemy.orm, not sqlalchemy.ext.declarative: the latter re-export is
+# deprecated in 2.0 (MovedIn20Warning) and slated for removal. Same class either
+# way, so this changes nothing about the mapping.
+from sqlalchemy.orm import declarative_base, sessionmaker
 from .config import settings
 
 engine = create_engine(
     settings.DATABASE_URL,
     connect_args={"check_same_thread": False},
-    # Default pool_size=5 / max_overflow=10 gives only 15 concurrent connections.
-    # Image-gen requests hold their DB session for the entire upstream call
-    # (60-120s), so a 17-request test batch saturates the pool instantly.
-    # SQLite connections are cheap, so a larger pool is the right fix here.
+    # Generous because checkouts are short but bursty: a 50-wide batch fires 50
+    # requests at once, each taking a connection just long enough to read its
+    # config. They no longer hold one across the upstream call itself — see
+    # core/deps.py, which is what keeps 50 concurrent generations from exceeding
+    # this pool. SQLite connections are cheap, so headroom costs little.
     pool_size=30,
     max_overflow=10,
 )

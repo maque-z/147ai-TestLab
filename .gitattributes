@@ -8,3 +8,9 @@ Dockerfile text eol=lf
 
 # PowerShell 脚本只在 Windows 跑，保持 CRLF
 *.ps1 text eol=crlf
+
+# 默认提示词是「发给上游的数据」，不是代码：模板字符串里的换行会原样进入请求体。
+# core.autocrlf=true 的 Windows 检出会把它变成 \r\n，Linux 服务器上是 \n，
+# 于是两台机器发出去的 prompt 逐字节不同（854 vs 812 字符），跑出来的结果不可比。
+# 钉成 LF，让任何平台送出的 prompt 完全一致。
+frontend/src/utils/defaultPrompt.ts text eol=lf

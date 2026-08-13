@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
-from ..core.deps import get_current_user
+from ..core.deps import UpstreamConfig, get_current_user, get_image_config
 # Byte-level inspection lives in core/ because the Gemini endpoint needs the same
 # checks: both upstreams declare a format that can disagree with the bytes sent.
 from ..core.imaging import (
@@ -18,7 +18,17 @@ from ..core.imaging import (
 )
 from ..crud import user as user_crud
 from ..schemas.image_config import ImageConfigOut, ImageConfigUpdate
-from ..schemas.image_gen import GenerateRequest, GenerateResponse, GeneratedImage
+from ..schemas.image_gen import (
+    COMPRESSION_MAX,
+    COMPRESSION_MIN,
+    MAX_PARAM_LEN,
+    MAX_PROMPT_LEN,
+    N_MAX,
+    N_MIN,
+    GenerateRequest,
+    GenerateResponse,
+    GeneratedImage,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/image-gen", tags=["image-gen"])
@@ -31,7 +41,7 @@ MAX_MASK_BYTES = 4 * 1024 * 1024
 ALLOWED_INPUT_FORMATS = ("png", "jpeg", "webp")
 
 
-async def call_upstream(cfg, path: str, **kwargs) -> tuple[dict, int, str | None]:
+async def call_upstream(cfg: UpstreamConfig, path: str, **kwargs) -> tuple[dict, int, str | None]:
     """POST to the upstream image API and return (json, elapsed_ms, request_id).
 
     Every failure mode is turned into an HTTPException carrying a message that is
@@ -147,19 +157,6 @@ def optional_params(*, size, quality, output_format, output_compression, moderat
     return params
 
 
-def require_config(db: Session, user_id: int):
-    cfg = user_crud.get_image_config(db, user_id)
-    if not cfg.api_key:
-        raise HTTPException(status_code=400, detail="请先在配置中填写 API Key")
-    # Defaults to "" so an unconfigured deploy fails here rather than silently
-    # sending test traffic somewhere. Without this check the empty string reaches
-    # httpx as a relative URL and surfaces as a 502 wrapping an internal
-    # exception string, which reads like the upstream is broken.
-    if not cfg.baseurl:
-        raise HTTPException(status_code=400, detail="请先在配置中填写 Base URL")
-    return cfg
-
-
 @router.get("/config", response_model=ImageConfigOut)
 def get_config(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     return user_crud.get_image_config(db, current_user.id)
@@ -177,13 +174,15 @@ def save_config(
 @router.post("/generate", response_model=GenerateResponse)
 async def generate(
     body: GenerateRequest,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    cfg: UpstreamConfig = Depends(get_image_config),
 ):
     """Run one parameter combination. The frontend expands the matrix and calls
-    this concurrently, so results stream back as each request finishes."""
-    cfg = require_config(db, current_user.id)
+    this concurrently, so results stream back as each request finishes.
 
+    No `db` dependency on purpose: the config arrives as a snapshot with its
+    session already closed, so no pooled connection is held across the 60-120s
+    upstream call. See core/deps.py.
+    """
     payload: dict = {
         "model": cfg.model_id,
         "prompt": body.prompt,
@@ -216,26 +215,30 @@ async def generate(
 
 @router.post("/edit", response_model=GenerateResponse)
 async def edit(
-    prompt: str = Form(...),
+    # Same bounds as GenerateRequest, imported rather than restated — this
+    # endpoint takes the identical params as multipart Form fields, and two
+    # hand-written copies of these numbers would drift.
+    prompt: str = Form(..., min_length=1, max_length=MAX_PROMPT_LEN),
     images: list[UploadFile] = File(...),
     mask: UploadFile | None = File(None),
-    size: str | None = Form(None),
-    quality: str | None = Form(None),
-    n: int | None = Form(None),
-    output_format: str | None = Form(None),
-    output_compression: int | None = Form(None),
-    moderation: str | None = Form(None),
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    size: str | None = Form(None, max_length=MAX_PARAM_LEN),
+    quality: str | None = Form(None, max_length=MAX_PARAM_LEN),
+    n: int | None = Form(None, ge=N_MIN, le=N_MAX),
+    output_format: str | None = Form(None, max_length=MAX_PARAM_LEN),
+    output_compression: int | None = Form(
+        None, ge=COMPRESSION_MIN, le=COMPRESSION_MAX
+    ),
+    moderation: str | None = Form(None, max_length=MAX_PARAM_LEN),
+    cfg: UpstreamConfig = Depends(get_image_config),
 ):
     """Run one edit combination against /v1/images/edits.
 
     The first upload is the canvas being edited; the rest are reference images.
     The mask applies only to the first one, and its fully transparent pixels are
     the region the model is asked to repaint.
-    """
-    cfg = require_config(db, current_user.id)
 
+    No `db` dependency, same as /generate — see core/deps.py.
+    """
     if not images:
         raise HTTPException(status_code=400, detail="请至少上传 1 张参考图")
     if len(images) > MAX_IMAGES:

@@ -1,6 +1,11 @@
-# pnpm 11 blocks dependency lifecycle scripts unless they are named here.
-# Both need theirs: esbuild's postinstall places its native binary and
-# vue-demi's writes the Vue compatibility shim used by the UI dependencies.
-allowBuilds:
-  esbuild: true
-  vue-demi: true
+# pnpm 10+ blocks dependency lifecycle scripts unless they are named here.
+# The key is `onlyBuiltDependencies` and it takes a list — `allowBuilds` with a
+# map was not a key pnpm ever read, so it silently did nothing and both scripts
+# stayed blocked ("Ignored build scripts: esbuild, vue-demi" on every install).
+#
+# The build survived that only by luck: esbuild's binary also arrives via the
+# @esbuild/<platform> optional dependency, and vue-demi ships its lib/ prebuilt.
+# Named properly here so neither is relying on that.
+onlyBuiltDependencies:
+  - esbuild
+  - vue-demi

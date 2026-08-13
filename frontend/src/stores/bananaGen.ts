@@ -6,6 +6,8 @@ import type {
 } from '@/types'
 import * as bananaApi from '@/api/bananaGen'
 import { NATIVE_MODELS, OPENAI_MODELS } from '@/utils/bananaSpec'
+import { b64ToBlobUrl, imageMime, revokeJob, useBatchRunner } from '@/utils/batch'
+import { DEFAULT_PROMPT } from '@/utils/defaultPrompt'
 
 const DEFAULT_CONFIG: BananaConfig = {
   baseurl: '',
@@ -13,55 +15,6 @@ const DEFAULT_CONFIG: BananaConfig = {
   model_id: 'gemini-3-pro-image-preview',
   timeout: 480,
 }
-
-/** Hard cap on retained cards, per pool. Blob URLs keep the bytes off the JS
- *  heap, but the DOM still has to render every card, so each list stays bounded
- *  independently — same arrangement as the gpt-image pools. */
-const MAX_POOL = 50
-
-export const DEFAULT_PROMPT = `深圳一日游手绘地图插画，清新可爱手绘风格，旅行手账风，地图式俯视构图（top-down map illustration），整体布局清晰有层次，色彩明亮柔和，带轻微水彩质感。
-
-画面中展示深圳主要景点，使用卡通手绘插画表现，每个景点独立标注，并配有清晰、规范、标准简体中文文字说明（非常重要：文字必须正确、无错别字、无乱码、可读性强）。
-
-📍 景点与文字（要求严格按以下内容生成）
-世界之窗
-文字：世界文化景观缩影
-深圳湾公园
-文字：滨海休闲好去处
-大梅沙海滨公园
-文字：深圳经典海滩
-东部华侨城
-文字：生态旅游度假区
-莲花山公园
-文字：俯瞰深圳城市风光
-平安金融中心
-文字：深圳第一高楼
-华强北
-文字：电子科技天堂
-
-🎨 风格细化（提高出图质量关键）
-手绘插画风格（hand-drawn illustration）
-旅行手账 / 地图插画风（travel sketch map style）
-线条干净柔和（clean soft lines）
-色彩清新明亮（bright pastel colors）
-轻微水彩渲染（light watercolor texture）
-元素可爱卡通化（cute cartoon landmarks）
-布局类似旅游导览图（tourist guide map layout）
-
-🔤 中文文字优化约束（非常关键）
-所有文字必须为简体中文
-字体工整清晰（类似印刷体 / 手写清晰体）
-禁止乱码、拼写错误、缺字、多字
-每个景点文字紧贴对应图标
-文字大小适中，保证可读性
-不要生成无意义符号或英文替代
-
-highly legible Chinese text, correct spelling, no garbled characters, no distorted glyphs
-
-🖼️ 输出要求
-横版 16:9
-高分辨率（4K / high resolution）
-适合海报或旅游宣传册展示`
 
 let jobSeq = 0
 
@@ -95,33 +48,10 @@ function buildCombos(m: BananaMatrix): Omit<BananaGenerateRequest, 'prompt'>[] {
   return combos
 }
 
-/** Run tasks with at most `limit` in flight. Each worker pulls the next index off
- *  a shared cursor, so a slow task never blocks the others. */
-async function runPool(tasks: (() => Promise<void>)[], limit: number, signal: AbortSignal) {
-  let cursor = 0
-  const worker = async () => {
-    while (cursor < tasks.length) {
-      if (signal.aborted) return
-      const i = cursor++
-      await tasks[i]()
-    }
-  }
-  // Clamp: a cleared number input yields null/0, which would spawn no workers
-  // and leave every job stuck on "pending".
-  const workers = Math.max(1, Math.min(limit || 1, tasks.length))
-  await Promise.all(Array.from({ length: workers }, worker))
-}
-
-/** Decode base64 off the main thread via the browser's own fetch/blob pipeline.
- *  Same reason as the imageGen store — a synchronous atob loop blocks for tens of
- *  ms per image, and 4K payloads here are far larger. */
-async function b64ToBlobUrl(b64: string, mime: string): Promise<string> {
-  const resp = await fetch(`data:${mime};base64,${b64}`)
-  const blob = await resp.blob()
-  return URL.createObjectURL(blob)
-}
-
 export const useBananaGenStore = defineStore('bananaGen', () => {
+  // Controllers, progress counters and the run loop — shared with the gpt-image
+  // surface so the two cannot drift on cancellation semantics. See utils/batch.ts.
+  const runner = useBatchRunner<BananaJob>()
   const config = ref<BananaConfig>({ ...DEFAULT_CONFIG })
 
   // One pool per surface, capped separately, so switching tabs never discards
@@ -129,7 +59,6 @@ export const useBananaGenStore = defineStore('bananaGen', () => {
   const nativeJobs = ref<BananaJob[]>([])
   const openaiJobs = ref<BananaJob[]>([])
 
-  const generating = ref(false)
   const configLoaded = ref(false)
   // The drawer opens from the top bar, which lives in the layout but renders
   // inside the view — so the flag has to be shared.
@@ -151,9 +80,6 @@ export const useBananaGenStore = defineStore('bananaGen', () => {
     safetyThreshold: null,
     concurrency: 50,
   })
-
-  const doneCount = ref(0)
-  const totalCount = ref(0)
 
   /** Models selectable on the current surface. The OpenAI-compatible doc names
    *  exactly one, so the two lists are not interchangeable. */
@@ -181,23 +107,6 @@ export const useBananaGenStore = defineStore('bananaGen', () => {
   })
   const canRun = computed(() => !blockReason.value && totalRequests.value > 0)
 
-  // One controller per active batch, tracked in a Set so concurrent batches are
-  // all reachable; stop() signals every one of them.
-  const batchCtls = new Set<AbortController>()
-
-  // One controller per job, so a single card can be stopped without touching the
-  // rest of the batch. Kept outside reactive state: a controller is not data the
-  // UI renders, and wrapping it in a proxy would break its internal slots.
-  const jobCtls = new Map<number, AbortController>()
-
-  function stop() {
-    batchCtls.forEach(c => c.abort())
-  }
-
-  function stopJob(id: number) {
-    jobCtls.get(id)?.abort()
-  }
-
   async function loadConfig() {
     if (configLoaded.value) return
     try {
@@ -212,58 +121,29 @@ export const useBananaGenStore = defineStore('bananaGen', () => {
     config.value = await bananaApi.saveConfig(cfg)
   }
 
-  function revoke(job: BananaJob) {
-    job.images.forEach(img => {
-      if (img.src?.startsWith('blob:')) URL.revokeObjectURL(img.src)
-    })
-  }
-
   function poolFor(m: BananaMode) {
     return m === 'openai' ? openaiJobs : nativeJobs
   }
 
-  /** Evict oldest-first down to the cap. New cards are unshifted onto the front,
-   *  so the tail is the oldest. Cards still pending or running are skipped: a
-   *  concurrent batch is actively writing to those, and dropping one would make
-   *  its own results vanish mid-flight. */
-  function trimPool(pool: typeof nativeJobs) {
-    for (let i = pool.value.length - 1; i >= 0 && pool.value.length > MAX_POOL; i--) {
-      const job = pool.value[i]
-      if (job.status === 'pending' || job.status === 'running') continue
-      revoke(job)
-      pool.value.splice(i, 1)
-    }
-  }
-
   function clearJobs() {
     const pool = poolFor(mode.value)
-    pool.value.forEach(revoke)
+    pool.value.forEach(revokeJob)
     pool.value = []
   }
 
-  /** Send one combination and write the result onto its card. */
+  /** Send one combination and write the result onto its card.
+   *
+   *  Status, cancellation, the abort cascade and the error branch are the
+   *  runner's job — see utils/batch.ts. This is only the part that differs
+   *  between the two surfaces. */
   async function runOne(
     job: BananaJob,
     promptText: string,
     combo: Omit<BananaGenerateRequest, 'prompt'>,
     jobMode: BananaMode,
-    batchCtl: AbortController,
+    signal: AbortSignal,
   ) {
-    const jobCtl = jobCtls.get(job.id)!
-    // Stopped while it sat in the queue — never send the request at all.
-    if (jobCtl.signal.aborted || batchCtl.signal.aborted) {
-      job.status = 'cancelled'
-      doneCount.value++
-      return
-    }
-
-    // Stopping the batch has to cascade into each open request.
-    const cascade = () => jobCtl.abort()
-    batchCtl.signal.addEventListener('abort', cascade)
-
-    job.status = 'running'
-    const t0 = performance.now()
-    try {
+    {
       const res = jobMode === 'openai'
         ? await bananaApi.chat({
             prompt: promptText,
@@ -271,22 +151,22 @@ export const useBananaGenStore = defineStore('bananaGen', () => {
             // The doc names this as the switch that turns on image output.
             modalities: ['text', 'image'],
             temperature: combo.temperature,
-          } as BananaChatRequest, jobCtl.signal)
+          } as BananaChatRequest, signal)
         : await bananaApi.generate(
             { prompt: promptText, ...combo } as BananaGenerateRequest,
-            jobCtl.signal,
+            signal,
           )
 
       // Decode in parallel — the images of one response are independent, and
       // awaiting them one at a time would serialise what the browser can overlap.
       job.images = await Promise.all(res.images.map(async img => {
         const actual = img.image_format ?? undefined
-        // Gemini returns PNG by default, and it is the only safe guess when the
-        // bytes could not be sniffed — image/undefined is undecodable.
-        const sub = actual ?? 'png'
         return {
           src: img.b64_json
-            ? await b64ToBlobUrl(img.b64_json, `image/${sub === 'jpg' ? 'jpeg' : sub}`)
+            // No requested-format fallback here: this surface has no
+            // output_format knob, and Gemini returns PNG by default — which is
+            // what imageMime lands on when the bytes could not be sniffed.
+            ? await b64ToBlobUrl(img.b64_json, imageMime(actual))
             : img.url,
           bytes: img.byte_size ?? undefined,
           actualFormat: actual,
@@ -318,21 +198,6 @@ export const useBananaGenStore = defineStore('bananaGen', () => {
           ? `未返回图片：${res.block_reason}`
           : '未返回图片'
       }
-    } catch (e: any) {
-      // stop()/stopJob() surface here as an axios cancellation. That is a user
-      // action, not a failure, so label it separately.
-      if (jobCtl.signal.aborted) {
-        job.status = 'cancelled'
-      } else {
-        job.status = 'error'
-        job.error = e?.response?.data?.detail || e?.message || '生成失败'
-      }
-      job.elapsedMs = Math.round(performance.now() - t0)
-      job.finishedAt = Date.now()
-    } finally {
-      batchCtl.signal.removeEventListener('abort', cascade)
-      jobCtls.delete(job.id)
-      doneCount.value++
     }
   }
 
@@ -378,52 +243,27 @@ export const useBananaGenStore = defineStore('bananaGen', () => {
       images: [],
       activeIndex: 0,
     }))
-    const pool = poolFor(jobMode)
-    pool.value.unshift(...seeded)
-
-    // Grab the reactive proxies — mutating the raw seeded objects would not
-    // trigger re-renders.
-    const live = pool.value.slice(0, seeded.length)
-
-    const ctl = new AbortController()
-
-    // First batch of a new idle→active transition: reset counters so stale
-    // numbers from the previous run don't ghost through the progress display.
-    if (batchCtls.size === 0) {
-      doneCount.value = 0
-      totalCount.value = 0
-    }
-    batchCtls.add(ctl)
-
-    // Controllers exist before the pool starts, so a card still queued can be
-    // stopped from its own button rather than only once it goes in flight.
-    live.forEach(j => jobCtls.set(j.id, new AbortController()))
-
-    generating.value = true
-    totalCount.value += combos.length
-    try {
-      await runPool(
-        combos.map((combo, i) => () => runOne(live[i], promptText, combo, jobMode, ctl)),
-        matrixIn.concurrency,
-        ctl.signal,
-      )
-    } finally {
-      // Slots the pool never claimed would otherwise sit on "pending" forever.
-      live.forEach(j => {
-        if (j.status === 'pending') j.status = 'cancelled'
-        jobCtls.delete(j.id)
-      })
-      batchCtls.delete(ctl)
-      generating.value = batchCtls.size > 0
-      trimPool(pool)
-    }
+    await runner.run(
+      poolFor(jobMode),
+      seeded,
+      (job, i, signal) => runOne(job, promptText, combos[i], jobMode, signal),
+      matrixIn.concurrency,
+    )
   }
 
   return {
-    config, nativeJobs, openaiJobs, generating, configLoaded, configOpen,
-    mode, prompt, matrix, paramsCollapsed, doneCount, totalCount,
+    config, nativeJobs, openaiJobs, configLoaded, configOpen,
+    mode, prompt, matrix, paramsCollapsed,
+    // Named one by one rather than spread — see the note in stores/imageGen.ts:
+    // the runner has its own `run`, and spreading it would collide with this
+    // store's, with only key order deciding the winner.
+    generating: runner.generating,
+    doneCount: runner.doneCount,
+    totalCount: runner.totalCount,
+    stop: runner.stop,
+    stopJob: runner.stopJob,
     availableModels, totalRequests, totalImages, blockReason, canRun,
-    loadConfig, updateConfig, stop, stopJob, clearJobs,
+    loadConfig, updateConfig, clearJobs,
     run, runMatrix,
   }
 })

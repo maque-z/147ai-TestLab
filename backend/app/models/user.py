@@ -1,6 +1,20 @@
-from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Text
+from datetime import datetime, timezone
+
+from sqlalchemy import Column, DateTime, Integer, String
+
 from ..core.database import Base
+
+
+def utcnow() -> datetime:
+    """Current UTC time, timezone-aware.
+
+    datetime.utcnow() is deprecated in 3.12 and returns a naive value that
+    silently pretends to be local time. The columns below are naive DateTime, and
+    SQLite's bind processor drops the offset, so the stored string is byte-for-byte
+    what utcnow() produced — this is a correctness change at the call site, not a
+    storage change, and needs no migration.
+    """
+    return datetime.now(timezone.utc)
 
 
 class User(Base):
@@ -9,7 +23,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, index=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
 
 class UserImageConfig(Base):
@@ -30,7 +44,7 @@ class UserImageConfig(Base):
     api_key = Column(String(500), default="")
     model_id = Column(String(100), default="gpt-image-2")
     timeout = Column(Integer, default=480)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class UserBananaConfig(Base):
@@ -57,4 +71,4 @@ class UserBananaConfig(Base):
     # whether the documented sizes actually come back.
     model_id = Column(String(100), default="gemini-3-pro-image-preview")
     timeout = Column(Integer, default=480)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

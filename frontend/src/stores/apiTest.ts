@@ -4,7 +4,9 @@ import type {
   TestCase, TestResult, TestLogEntry, TestVerdict, GenerateRequest, GenerateResponse,
 } from '@/types'
 import * as imageGenApi from '@/api/imageGen'
-import { useImageGenStore, DEFAULT_PROMPT } from '@/stores/imageGen'
+import { useImageGenStore } from '@/stores/imageGen'
+import { b64ToBlobUrl, runPool } from '@/utils/batch'
+import { DEFAULT_PROMPT } from '@/utils/defaultPrompt'
 
 // ─── Test suite definition ──────────────────────────────────────────────────
 
@@ -87,8 +89,10 @@ function buildTestCases(): TestCase[] {
   return cases
 }
 
-// Total cases: 6 + 3 + 3 + 3 + 1 + 1 = 17
-export const TEST_CASE_COUNT = 17
+/** How many probes the suite runs. Derived, not written down: the hand-maintained
+ *  number was wrong by two for several commits after a case was removed, and it
+ *  is quoted in the UI as the credit the run will spend. */
+export const TEST_CASE_COUNT = buildTestCases().length
 
 /** Cards are capped at this value for consistency with the generate/edit pools.
  *  In practice run() calls clear() first so this is a guard rather than a
@@ -102,15 +106,6 @@ function pad(n: number) { return String(n).padStart(2, '0') }
 function nowTs() {
   const d = new Date()
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-}
-
-/** Same off-thread decode as the imageGen store uses — see the note there. The
- *  suite fires all 17 probes at once, so a synchronous decode per response is
- *  exactly the case that stalls the log from scrolling. */
-async function b64ToBlobUrl(b64: string, mime: string): Promise<string> {
-  const resp = await fetch(`data:${mime};base64,${b64}`)
-  const blob = await resp.blob()
-  return URL.createObjectURL(blob)
 }
 
 function measureImage(src: string): Promise<{ w: number; h: number } | null> {
@@ -127,23 +122,6 @@ function parseSize(s: string): [number, number] | null {
   const m = s.match(/^(\d+)[x×](\d+)$/i)
   if (!m) return null
   return [parseInt(m[1], 10), parseInt(m[2], 10)]
-}
-
-async function runPool(
-  tasks: (() => Promise<void>)[],
-  limit: number,
-  signal: AbortSignal,
-) {
-  let cursor = 0
-  const worker = async () => {
-    while (cursor < tasks.length) {
-      if (signal.aborted) return
-      const i = cursor++
-      await tasks[i]()
-    }
-  }
-  const workers = Math.max(1, Math.min(limit, tasks.length))
-  await Promise.all(Array.from({ length: workers }, worker))
 }
 
 // ─── Per-result evaluation (called while result data is fresh) ───────────────

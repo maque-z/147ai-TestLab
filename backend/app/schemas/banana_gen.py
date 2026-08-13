@@ -10,8 +10,19 @@ upstream payload when None, because "unset" ("let the API apply its own
 default") is a distinct case from any value the user could pick.
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
+
+from .image_gen import MAX_PARAM_LEN, MAX_PROMPT_LEN
+
+# Same principle as the gpt-image side: wider than the documented ranges on
+# purpose, so an out-of-spec value can still be sent and the API's own reaction
+# observed. temperature is documented 0-2 and candidateCount 1-4; both are allowed
+# past that here. Only impossible values are refused.
+TEMPERATURE_MIN, TEMPERATURE_MAX = 0.0, 4.0
+CANDIDATE_MIN, CANDIDATE_MAX = 1, 32
+MAX_OUTPUT_TOKENS_MAX = 1_000_000
+MAX_LIST_ITEMS = 16
 
 
 class BananaGenerateRequest(BaseModel):
@@ -23,31 +34,43 @@ class BananaGenerateRequest(BaseModel):
     """
     model_config = {"protected_namespaces": ()}
 
-    prompt: str
+    prompt: str = Field(min_length=1, max_length=MAX_PROMPT_LEN)
     # Path segment of /v1beta/models/{model}:generateContent. Falls back to the
-    # stored config value when the matrix leaves it unset.
-    model_id: Optional[str] = None
+    # stored config value when the matrix leaves it unset. Length-capped because
+    # it is interpolated into the request path; the characters that could escape
+    # that path are rejected separately, in resolve_model.
+    model_id: Optional[str] = Field(default=None, max_length=MAX_PARAM_LEN)
 
     # generationConfig.responseModalities — documented as required, and it must
     # contain "IMAGE" or the model returns text only. Left optional here so the
     # matrix can probe what happens when it is omitted entirely.
-    response_modalities: Optional[List[str]] = None
+    response_modalities: Optional[List[str]] = Field(
+        default=None, max_length=MAX_LIST_ITEMS
+    )
 
     # generationConfig.imageConfig
-    aspect_ratio: Optional[str] = None
+    aspect_ratio: Optional[str] = Field(default=None, max_length=MAX_PARAM_LEN)
     # Documented values: 512 / 1K / 2K / 4K. Case-sensitive — "2k" is ignored by
     # the upstream, so it is passed through verbatim rather than normalised.
-    image_size: Optional[str] = None
+    image_size: Optional[str] = Field(default=None, max_length=MAX_PARAM_LEN)
 
     # generationConfig
-    temperature: Optional[float] = None
-    candidate_count: Optional[int] = None
-    max_output_tokens: Optional[int] = None
-    stop_sequences: Optional[List[str]] = None
+    temperature: Optional[float] = Field(
+        default=None, ge=TEMPERATURE_MIN, le=TEMPERATURE_MAX
+    )
+    candidate_count: Optional[int] = Field(
+        default=None, ge=CANDIDATE_MIN, le=CANDIDATE_MAX
+    )
+    max_output_tokens: Optional[int] = Field(
+        default=None, ge=1, le=MAX_OUTPUT_TOKENS_MAX
+    )
+    stop_sequences: Optional[List[str]] = Field(
+        default=None, max_length=MAX_LIST_ITEMS
+    )
 
     # safetySettings: one threshold applied to all five documented categories,
     # which is how the official example sets them. None omits the block entirely.
-    safety_threshold: Optional[str] = None
+    safety_threshold: Optional[str] = Field(default=None, max_length=MAX_PARAM_LEN)
 
 
 class BananaChatRequest(BaseModel):
@@ -57,11 +80,13 @@ class BananaChatRequest(BaseModel):
     """
     model_config = {"protected_namespaces": ()}
 
-    prompt: str
-    model_id: Optional[str] = None
+    prompt: str = Field(min_length=1, max_length=MAX_PROMPT_LEN)
+    model_id: Optional[str] = Field(default=None, max_length=MAX_PARAM_LEN)
     # Documented as the switch that turns on image output for this endpoint.
-    modalities: Optional[List[str]] = None
-    temperature: Optional[float] = None
+    modalities: Optional[List[str]] = Field(default=None, max_length=MAX_LIST_ITEMS)
+    temperature: Optional[float] = Field(
+        default=None, ge=TEMPERATURE_MIN, le=TEMPERATURE_MAX
+    )
 
 
 class BananaImage(BaseModel):
