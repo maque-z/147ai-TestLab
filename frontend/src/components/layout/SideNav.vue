@@ -44,7 +44,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { fadeInUp, pulse } from '@/utils/motion'
 
-const props = defineProps<{ collapsed: boolean; username?: string }>()
+const props = defineProps<{ collapsed: boolean; username?: string; isAdmin?: boolean }>()
 const emit = defineEmits<{ toggle: []; logout: [] }>()
 
 const username = computed(() => props.username || '未登录')
@@ -53,10 +53,17 @@ const initial = computed(() => username.value.charAt(0).toUpperCase())
 const navEl = ref<HTMLElement | null>(null)
 const footerEl = ref<HTMLElement | null>(null)
 
-const navItems = [
-  { to: '/image-gen', icon: '🖼️', label: 'GPT Image 生成' },
-  { to: '/banana-gen', icon: '🍌', label: 'Gemini 图片生成' }
-]
+// Hiding the entry is presentation only — it is not the permission. Every route
+// behind it is refused server-side by get_current_admin, which is what actually
+// enforces this.
+const navItems = computed(() => {
+  const items = [
+    { to: '/image-gen', icon: '🖼️', label: 'GPT Image 生成' },
+    { to: '/banana-gen', icon: '🍌', label: 'Gemini 图片生成' }
+  ]
+  if (props.isAdmin) items.push({ to: '/admin/users', icon: '👤', label: '账号管理' })
+  return items
+})
 
 function onToggle(e: MouseEvent) {
   pulse(e.currentTarget as HTMLElement)

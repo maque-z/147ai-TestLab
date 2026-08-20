@@ -28,6 +28,11 @@ const router = createRouter({
           path: 'banana-gen',
           name: 'banana-gen',
           component: () => import('@/views/BananaGenView.vue')
+        },
+        {
+          path: 'admin/users',
+          name: 'admin-users',
+          component: () => import('@/views/AdminUsersView.vue')
         }
       ]
     },

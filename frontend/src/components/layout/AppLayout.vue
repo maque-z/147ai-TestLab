@@ -3,6 +3,7 @@
     <SideNav
       :collapsed="collapsed"
       :username="auth.user?.username"
+      :is-admin="auth.user?.is_admin === true"
       @toggle="collapsed = !collapsed"
       @logout="handleLogout"
     />
@@ -137,7 +138,8 @@ const collapsed = ref(typeof window !== 'undefined' && window.innerWidth <= 640)
 
 const titleMap: Record<string, string> = {
   'image-gen': 'GPT Image 生成',
-  'banana-gen': 'Gemini 图片生成'
+  'banana-gen': 'Gemini 图片生成',
+  'admin-users': '账号管理'
 }
 
 const currentTitle = computed(() => titleMap[route.name as string] ?? '147ai TestLab')
