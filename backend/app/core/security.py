@@ -30,10 +30,19 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     to_encode = data.copy()
     # timezone-aware: datetime.utcnow() is deprecated in 3.12 and produces a
     # naive value that python-jose encodes against a different reference.
-    expire = datetime.now(timezone.utc) + (
+    now = datetime.now(timezone.utc)
+    # `iat` is what makes these tokens revocable. deps.get_current_user compares
+    # it against the account's password_changed_at, so a password reset (or any
+    # future event that bumps that column) invalidates every token minted before
+    # it — without the server having to store a single session.
+    #
+    # python-jose converts a datetime in `iat`/`exp`/`nbf` via
+    # timegm(value.utctimetuple()), which drops sub-second precision. The claim
+    # therefore lands as whole seconds; deps compensates. See RFC 7519 §4.1.6.
+    to_encode["iat"] = now
+    to_encode["exp"] = now + (
         expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-    to_encode["exp"] = expire
     to_encode.setdefault("type", "access")
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 

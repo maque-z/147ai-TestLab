@@ -15,6 +15,7 @@ already loaded, or a plain frozen snapshot — nothing that needs a live session
 """
 
 from dataclasses import dataclass
+from datetime import timezone
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -24,6 +25,40 @@ from .security import decode_token
 from ..crud import user as user_crud
 
 security = HTTPBearer()
+
+
+def _issued_before_password_change(iat, password_changed_at) -> bool:
+    """True when this token predates the account's last password change.
+
+    The one-second trap this exists to avoid: `iat` is whole seconds by RFC 7519,
+    while password_changed_at is a microsecond-precision datetime. An admin who
+    resets a password at 10:00:00.500 and a user who logs in at 10:00:00.700 would
+    otherwise produce a token whose iat (10:00:00) is *below* the stored value —
+    the token would be rejected the instant it was issued, and the account would
+    look permanently unable to log in.
+
+    Flooring the stored value to the same whole second removes that. The cost is
+    that a token minted earlier in the same second as the reset survives one extra
+    check; that window is meaningless, whereas "user can never log in" is a real
+    outage.
+
+    A token with no `iat` at all predates this feature entirely, so it is treated
+    as too old — those tokens are already invalid for other reasons after the
+    upgrade, and refusing them costs one re-login.
+    """
+    if password_changed_at is None:
+        return False
+    if iat is None:
+        return True
+
+    # Stored naive: SQLite drops the offset on write, so what comes back is a
+    # naive value that is already UTC. Rows written by the ORM default before a
+    # refresh can still be aware, so normalise rather than assume.
+    changed = password_changed_at
+    if changed.tzinfo is None:
+        changed = changed.replace(tzinfo=timezone.utc)
+
+    return int(iat) < int(changed.timestamp())
 
 
 def get_current_user(
@@ -64,7 +99,36 @@ def get_current_user(
             detail="User not found"
         )
 
+    # Both checks below reuse the row already fetched above — no extra round trip.
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="账号已被禁用",
+        )
+
+    if _issued_before_password_change(payload.get("iat"), user.password_changed_at):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="密码已变更，请重新登录",
+        )
+
     return user
+
+
+def get_current_admin(current_user=Depends(get_current_user)):
+    """The authenticated user, refused unless they are an administrator.
+
+    Layered on get_current_user rather than repeating the lookup: that dependency
+    already fetched the row with every column loaded, so reading is_admin here
+    costs nothing. It is also the single place where is_active and token age are
+    enforced, and admin routes must not bypass either.
+    """
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="需要管理员权限",
+        )
+    return current_user
 
 
 @dataclass(frozen=True)
