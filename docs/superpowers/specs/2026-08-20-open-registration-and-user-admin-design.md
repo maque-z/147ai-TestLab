@@ -203,7 +203,13 @@ user.password_changed_at = utcnow().replace(microsecond=0) + timedelta(seconds=1
 
 ### 7.1 注册
 
-`LoginView.vue` 的注册按钮与 `handleRegister` 已存在并已接好 `auth.register()`，当前仅因后端返回 403 而不可用。前端仅需补充与后端一致的密码规则校验（8–72 字节），使用户在提交前看到提示而非收到 422。
+`LoginView.vue` 的注册按钮存在，但**它此前从未调用过 `auth.register()`** —— `handleRegister` 只弹一句「暂未开放注册功能」。因此这里是实现，不只是加校验。
+
+> 本节初稿曾记为「已接好 `auth.register()`，仅因后端 403 不可用」，实施时核对代码后更正。
+
+前端另需与后端一致的规则校验（用户名 3–50 字符、密码 8–72 字节），使用户在提交前看到中文提示，而非收到 pydantic 的 422 数组。
+
+**用户名长度只在注册路径校验。** 登录与注册共用同一个 naive-ui `rules` 对象，而既有数据库中存在短于 3 字符的用户名（`1`、`147`）—— 把下限并入 `rules` 会使这些账号无法登录。
 
 `api/auth.ts` 的 `register()` 签名（`LoginRequest` → `TokenResponse`）与新后端契合，无需改动。
 
