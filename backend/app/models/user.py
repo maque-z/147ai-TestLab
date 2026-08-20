@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Integer, String
 
 from ..core.database import Base
 
@@ -24,6 +24,15 @@ class User(Base):
     username = Column(String(50), unique=True, index=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=utcnow)
+
+    # Rows that predate these three columns are backfilled by
+    # bootstrap._ensure_user_columns(). create_all never alters an existing
+    # table, so without that backfill these would apply to fresh databases only.
+    is_admin = Column(Boolean, nullable=False, default=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    # The anchor that makes a stateless JWT revocable: deps.get_current_user
+    # rejects any token issued before this moment. Reset on password change.
+    password_changed_at = Column(DateTime, nullable=False, default=utcnow)
 
 
 class UserImageConfig(Base):
