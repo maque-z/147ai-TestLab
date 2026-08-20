@@ -1,3 +1,4 @@
+from datetime import timedelta
 from typing import Type, TypeVar
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -138,7 +139,20 @@ def reset_password(db: Session, user: User, new_password: str) -> User:
     working for the rest of their seven days.
     """
     user.hashed_password = get_password_hash(new_password)
-    user.password_changed_at = utcnow()
+    # Rounded UP to the next whole second, which is what actually closes the
+    # window. `iat` has one-second resolution (RFC 7519), so a token minted at
+    # 10:00:00.100 and a reset at 10:00:00.900 are indistinguishable by time
+    # alone. Storing the raw value would let that token pass `iat < changed`
+    # forever — and an attacker holding the old password is exactly who a reset
+    # is aimed at, so they can log in once a second and be guaranteed a token
+    # inside the reset's own second.
+    #
+    # Rounding up makes the whole of that second unreachable: every token minted
+    # during it is refused, and the first acceptable `iat` is the second after.
+    # The cost is that a legitimate login landing inside that same second is also
+    # refused once, and succeeds on retry — a bounded, self-correcting blip,
+    # traded for a hole that does not close on its own.
+    user.password_changed_at = utcnow().replace(microsecond=0) + timedelta(seconds=1)
     db.commit()
     db.refresh(user)
     return user
