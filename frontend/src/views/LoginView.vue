@@ -18,7 +18,7 @@
           <n-input
             v-model:value="form.password"
             type="password"
-            placeholder="密码"
+            placeholder="密码（注册需 8 位以上）"
             size="large"
             class="nm-inset"
             @keyup.enter="handleLogin"
@@ -43,6 +43,7 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { NForm, NFormItem, NInput, useMessage } from 'naive-ui'
 import { fadeInUp, nudge } from '@/utils/motion'
+import { checkPassword } from '@/utils/password'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -86,11 +87,61 @@ async function handleLogin() {
   }
 }
 
-/** Registration is closed for now. The button is kept so its absence does not
- *  read as a broken layout, but it only explains why it does nothing — the
- *  backend /auth/register route is also disabled, so this is not the only guard. */
-function handleRegister() {
-  message.info('暂未开放注册功能，请用账号登录')
+/** Mirrors USERNAME_MIN/MAX in backend/app/schemas/user.py.
+ *
+ *  Deliberately not added to `rules`, which both buttons share: those bounds
+ *  apply to UserRegister only. Accounts created before registration opened may
+ *  hold shorter names — this database has "1" and "147" — and enforcing the
+ *  minimum on the login form would lock them out of their own accounts.
+ */
+function checkUsername(name: string): string {
+  const trimmed = name.trim()
+  if (trimmed.length < 3 || trimmed.length > 50) return '用户名需 3-50 个字符'
+  return ''
+}
+
+/** Pull a readable string out of an error body.
+ *
+ *  A 4xx from this API carries `detail` as a plain Chinese string, but a 422
+ *  from pydantic carries a *list* of error objects — rendering that directly
+ *  would put "[object Object]" in front of the user.
+ */
+function errorText(e: any, fallback: string): string {
+  const detail = e?.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail) && detail.length) return detail[0]?.msg || fallback
+  return fallback
+}
+
+async function handleRegister() {
+  try {
+    await formRef.value?.validate()
+  } catch {
+    return
+  }
+
+  // Checked before the request so the user reads the rule in plain Chinese
+  // rather than a pydantic 422 body.
+  const problem = checkUsername(form.value.username) || checkPassword(form.value.password)
+  if (problem) {
+    message.warning(problem)
+    nudge(cardEl.value)
+    return
+  }
+
+  loading.value = true
+  try {
+    // Registration logs straight in — the backend returns a token alongside the
+    // new account, so there is no second round trip through the login form.
+    await auth.register(form.value.username.trim(), form.value.password)
+    message.success('注册成功')
+    router.push('/')
+  } catch (e: any) {
+    nudge(cardEl.value)
+    message.error(errorText(e, '注册失败'))
+  } finally {
+    loading.value = false
+  }
 }
 </script>
 
