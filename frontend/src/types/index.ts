@@ -6,6 +6,8 @@ export interface User {
   id: number
   username: string
   created_at: string
+  is_admin: boolean
+  is_active: boolean
 }
 
 export interface TokenResponse {
