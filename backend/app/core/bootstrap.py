@@ -159,10 +159,12 @@ def seed_default_user() -> None:
                 "Set it in .env; it is ignored after the account exists."
             )
 
+        # The sole administrator. is_admin has no write endpoint, so this and
+        # _promote_default_admin are the only two ways an account acquires it.
         user_crud.create_user(db, UserCreate(
             username=settings.DEFAULT_USERNAME,
             password=settings.DEFAULT_PASSWORD,
-        ))
+        ), is_admin=True)
         # The password is not logged: it is a real credential, and application
         # logs are the wrong place for one.
         logger.info("Seeded default user %r.", settings.DEFAULT_USERNAME)
