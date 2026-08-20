@@ -81,6 +81,13 @@ class Settings(BaseSettings):
     DEFAULT_USERNAME: str = "147ai"
     DEFAULT_PASSWORD: str = ""
 
+    # Self-registration. Open by default, which is the deliberate choice for this
+    # deployment: per-user config rows mean a new account starts with an empty
+    # api_key and must supply its own, so a registrant spends their own upstream
+    # quota rather than the operator's. Set ALLOW_REGISTRATION=false in .env to
+    # close it again without a code change.
+    ALLOW_REGISTRATION: bool = True
+
     # Login throttling, per client IP. MAX_ATTEMPTS within WINDOW_SECONDS trips a
     # lockout lasting LOCKOUT_SECONDS. The lockout is longer than the window on
     # purpose — otherwise waiting for the window to slide would be enough, and
