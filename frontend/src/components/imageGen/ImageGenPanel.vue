@@ -41,6 +41,19 @@
         </div>
 
         <div v-if="isBatch" class="head-actions">
+          <!-- Same control as the viewer's, driving the same shared state: the
+               grid and the full-screen view must never disagree about what is
+               behind an image, since that is the thing being judged. -->
+          <button
+            v-if="visibleJobs.length"
+            class="btn btn-sm bd-btn"
+            title="切换图片背景 — 真透明的图背景会跟着变，画上去的棋盘格不会"
+            @click="cycleBackdrop"
+          >
+            <span class="bd-swatch" :class="`bd-${backdrop}`" />
+            {{ BACKDROP_LABEL[backdrop] }}
+          </button>
+
           <!-- Stopping is per-card; this is the bulk escape hatch, since a wide
                matrix would otherwise take one click per card to abandon. -->
           <button
@@ -143,6 +156,65 @@
             </tbody>
           </table>
           </div><!-- /.size-table-scroll -->
+
+          <!-- gpt-image-2 takes an arbitrary WxH, not just the 30 recommended
+               pairs, so the table alone cannot reach the new behaviour. -->
+          <div class="custom-size">
+            <n-input
+              v-model:value="customSize"
+              placeholder="自定义尺寸，如 1600x900"
+              size="small"
+              style="max-width:200px"
+              @keyup.enter="addCustomSize"
+            />
+            <button class="btn btn-xs" :disabled="!customSizeValid" @click="addCustomSize">
+              添加
+            </button>
+
+            <!-- The rules are the API's, not this tool's, and they are not
+                 guessable from the input. Always present rather than only
+                 appearing once something is already wrong. -->
+            <n-popover trigger="manual" :show="hintOpen" placement="top" :width="280">
+              <template #trigger>
+                <button
+                  class="hint-btn"
+                  :class="{ on: hintOpen }"
+                  aria-label="自定义尺寸的取值条件"
+                  @click="hintOpen = !hintOpen"
+                  @mouseenter="hintOpen = true"
+                  @mouseleave="hintOpen = false"
+                  @focus="hintOpen = true"
+                  @blur="hintOpen = false"
+                >!</button>
+              </template>
+              <div class="hint-pop">
+                <div class="hint-title">gpt-image-2 自定义尺寸条件</div>
+                <ul class="hint-list">
+                  <li>格式 <code>宽x高</code>，如 <code>1600x900</code></li>
+                  <li>宽、高均为 <b>16 的倍数</b></li>
+                  <li>宽高比在 <b>1:3 ~ 3:1</b> 之间</li>
+                  <li>最大 <b>3840×2160</b></li>
+                  <li>超过 2560×1440 官方标注为<b>实验性</b></li>
+                </ul>
+                <div class="hint-foot">
+                  不满足也能添加并发出 —— 本工具就是用来看 API 实际怎么反应的。
+                </div>
+              </div>
+            </n-popover>
+
+            <span v-if="customSizeHint" class="text-muted custom-hint">{{ customSizeHint }}</span>
+          </div>
+
+          <!-- Sizes not present in the table above would otherwise be selected but
+               invisible, since the grid can only highlight its own 30 cells. -->
+          <div v-if="extraSizes.length" class="chips">
+            <button
+              v-for="s in extraSizes" :key="s"
+              class="chip on"
+              title="点击移除"
+              @click="toggle(store.matrix.sizes, s)"
+            >{{ s.replace('x', '×') }} ×</button>
+          </div>
         </div>
 
         <!-- Chip groups. Nothing selected == send nothing and let the API pick
@@ -189,7 +261,49 @@
               >{{ o }}</button>
             </div>
           </div>
+
+          <!-- Transparency went to preview for gpt-image-2 on 2026-08-21; this
+               group was absent before that because the model refused it. -->
+          <div class="field">
+            <div class="field-label">
+              背景
+              <span class="text-muted" style="font-weight:400">{{ multLabel(store.matrix.backgrounds, DEFAULTS.background) }}</span>
+            </div>
+            <div class="chips">
+              <button
+                v-for="o in BACKGROUNDS" :key="o"
+                class="chip" :class="{ on: store.matrix.backgrounds.includes(o) }"
+                :title="o === 'transparent' ? '需要 png 或 webp 承载 alpha 通道' : undefined"
+                @click="toggle(store.matrix.backgrounds, o)"
+              >{{ o }}</button>
+            </div>
+          </div>
+
+          <!-- Edits-only. Documented for "gpt-image-1 and gpt-image-1.5 and later
+               models" without ever naming gpt-image-2, so whether it applies to
+               this model is precisely what sending it settles. -->
+          <div v-if="store.mode === 'edit'" class="field">
+            <div class="field-label">
+              输入保真度
+              <span class="text-muted" style="font-weight:400">{{ multLabel(store.matrix.inputFidelities, DEFAULTS.inputFidelity) }}</span>
+            </div>
+            <div class="chips">
+              <button
+                v-for="o in INPUT_FIDELITIES" :key="o"
+                class="chip" :class="{ on: store.matrix.inputFidelities.includes(o) }"
+                title="官方文档未点名 gpt-image-2 是否支持，发送它就是为了问出答案"
+                @click="toggle(store.matrix.inputFidelities, o)"
+              >{{ o }}</button>
+            </div>
+          </div>
         </div>
+
+        <!-- Sent regardless, and flagged rather than filtered: a jpeg cannot carry
+             an alpha channel, so what the API does here is the whole point. -->
+        <p v-if="transparentJpeg" class="warn-line">
+          ⚠ 已同时选中 <code>transparent</code> 与 <code>jpeg</code>：jpeg 没有 alpha
+          通道，承载不了透明。这些组合仍会照常发出 —— 就是要看 API 是报错还是悄悄返回不透明图。
+        </p>
 
         <!-- Numeric params -->
         <div class="num-grid">
@@ -224,7 +338,7 @@
     <!-- ===== Results (batch mode only) ===== -->
     <div v-else-if="visibleJobs.length" ref="gridEl" class="results-grid">
       <div v-for="job in visibleJobs" :key="job.id" class="card nm-raised" :data-job="job.id">
-        <div class="canvas" @click="activeImg(job)?.src && openPreview(job)">
+        <div class="canvas" :class="`bd-${backdrop}`" @click="activeImg(job)?.src && openPreview(job)">
           <img
             v-if="activeImg(job)?.src"
             :src="activeImg(job)!.src"
@@ -355,7 +469,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
-import { NInput, NInputNumber, NSpin } from 'naive-ui'
+import { NInput, NInputNumber, NPopover, NSpin } from 'naive-ui'
 import { useImageGenStore } from '@/stores/imageGen'
 import { TEST_CASE_COUNT, CONCURRENCY } from '@/stores/apiTest'
 import { enterCards, fadeInUp, pulse, countTo } from '@/utils/motion'
@@ -363,6 +477,7 @@ import RefImages from './RefImages.vue'
 import MaskEditor from './MaskEditor.vue'
 import ApiTestPanel from './ApiTestPanel.vue'
 import ImagePreview, { type PreviewItem } from './ImagePreview.vue'
+import { backdrop, cycleBackdrop, BACKDROP_LABEL } from './backdrop'
 import type { GenMode, ImageJob, JobImage } from '@/types'
 
 /** Prompt, matrix, mode and the uploads all live in the store: the run button
@@ -437,14 +552,18 @@ const SIZE_TABLE = [
 const ALL_SIZES = SIZE_TABLE.flatMap(r => r.sizes)
 
 /** Selectable values. No "auto" entry anywhere: leaving a group empty already
- *  means "send nothing and let the API apply its own default".
+ *  means "send nothing and let the API apply its own default", and the group's
+ *  own label spells that default out — so an explicit auto chip would be a
+ *  second way to say the same thing. Same reason `moderation` only offers `low`.
  *
- *  No background group either — gpt-image-2 rejects background=transparent, and
- *  opaque is what it does by default, so the param has nothing left to test.
+ *  The background group exists at all because the 2026-08-20 changelog put
+ *  transparency in preview for gpt-image-2; before that the model refused it.
  */
 const QUALITIES   = ['low', 'medium', 'high']
 const FORMATS     = ['png', 'jpeg', 'webp']
 const MODERATIONS = ['low']
+const BACKGROUNDS = ['transparent', 'opaque']
+const INPUT_FIDELITIES = ['high', 'low']
 
 /** What the API falls back to when a param is left unset, per the official
  *  reference. Shown wherever a group is empty so "默认" is never a mystery. */
@@ -453,11 +572,78 @@ const DEFAULTS = {
   quality: 'auto',
   format: 'png',
   moderation: 'auto',
+  background: 'auto',
+  inputFidelity: 'low',
   compression: 100,
 } as const
 
 const hasLossyFormat = computed(() =>
   store.matrix.formats.includes('jpeg') || store.matrix.formats.includes('webp')
+)
+
+/** Both selected means the batch contains combinations that cannot work as
+ *  specified. They are still sent — see the warning line in the template. */
+const transparentJpeg = computed(() =>
+  store.matrix.backgrounds.includes('transparent') && store.matrix.formats.includes('jpeg')
+)
+
+// ---- Custom size entry ----
+
+const customSize = ref('')
+/** Hover and click both open the rules popover: hover is the fast path on a
+ *  desktop, and click is the only one that works on a touch screen. */
+const hintOpen = ref(false)
+
+/** Documented bounds for gpt-image-2: each side divisible by 16, aspect ratio
+ *  within 1:3–3:1, max 3840×2160, and anything above 2560×1440 flagged
+ *  experimental. Violations are reported but not blocked — an out-of-spec size is
+ *  a probe, exactly like n=50 elsewhere. */
+const MAX_PIXELS = 3840 * 2160
+const EXPERIMENTAL_PIXELS = 2560 * 1440
+
+const parsedCustom = computed(() => {
+  const m = customSize.value.trim().match(/^(\d+)\s*[x×]\s*(\d+)$/i)
+  if (!m) return null
+  const w = parseInt(m[1], 10)
+  const h = parseInt(m[2], 10)
+  if (!w || !h) return null
+  return { w, h, key: `${w}x${h}` }
+})
+
+const customSizeValid = computed(() => !!parsedCustom.value)
+
+/** Why the entered size is questionable, or that it is already selected. Advisory
+ *  only: the 添加 button stays enabled for anything parseable. */
+const customSizeHint = computed(() => {
+  const raw = customSize.value.trim()
+  if (!raw) return ''
+  const p = parsedCustom.value
+  if (!p) return '格式应为 宽x高，如 1600x900'
+  if (store.matrix.sizes.includes(p.key)) return '已在列表中'
+
+  const notes: string[] = []
+  if (p.w % 16 || p.h % 16) notes.push('非 16 的倍数')
+  const ratio = p.w / p.h
+  if (ratio > 3 || ratio < 1 / 3) notes.push('比例超出 1:3–3:1')
+  if (p.w * p.h > MAX_PIXELS) notes.push('像素数超过 3840×2160')
+  if (notes.length) return `⚠ ${notes.join(' · ')}，仍可发送以观察 API 反应`
+  // In spec, but the docs call this range experimental — worth saying, since a
+  // failure up here is expected behaviour rather than a finding.
+  if (p.w * p.h > EXPERIMENTAL_PIXELS) return '官方标注为实验性区间（> 2560×1440）'
+  return ''
+})
+
+function addCustomSize() {
+  const p = parsedCustom.value
+  if (!p) return
+  if (!store.matrix.sizes.includes(p.key)) store.matrix.sizes.push(p.key)
+  customSize.value = ''
+}
+
+/** Selected sizes that the table cannot render, so they stay visible and
+ *  removable rather than silently inflating the request count. */
+const extraSizes = computed(() =>
+  store.matrix.sizes.filter(s => !ALL_SIZES.includes(s))
 )
 
 /** Label for a chip group: how many requests it multiplies the batch by, or the
@@ -614,6 +800,30 @@ function compareRows(job: ImageJob): CompareRow[] {
     bad: job.status === 'done' && job.images.length !== job.n,
   })
 
+  // Background is the one param whose outcome is directly measurable: the
+  // decoded pixels either carry transparency or they do not. An API that accepts
+  // background=transparent and returns an opaque image is caught here and
+  // nowhere else.
+  {
+    const want = job.background
+    const alpha = img?.hasAlpha
+    rows.push({
+      label: '背景',
+      want: want ?? def(DEFAULTS.background),
+      got: alpha === undefined ? DASH : alpha ? '透明' : '不透明',
+      bad: want === 'transparent' && alpha === false,
+    })
+    // Only worth a row when the API contradicts itself against the request.
+    if (job.declaredBackground && want && job.declaredBackground !== want) {
+      rows.push({
+        label: '└ API 声称',
+        want,
+        got: job.declaredBackground,
+        bad: true,
+      })
+    }
+  }
+
   // Edit-only inputs. Shown as requested-only because the API reports nothing
   // back about what it did with them.
   if (job.mode === 'edit') {
@@ -627,6 +837,11 @@ function compareRows(job: ImageJob): CompareRow[] {
       want: job.hasMask ? '已上传' : '未上传',
       got: DASH,
     })
+    // Only when it was actually sent — a row reading "未发送" on every edit card
+    // would be noise, and this param is expected to be absent most of the time.
+    if (job.inputFidelity) {
+      rows.push({ label: '保真度', want: job.inputFidelity, got: DASH })
+    }
   }
 
   // The API echoes none of these back, so only the requested value is knowable.
@@ -883,6 +1098,70 @@ function fmtFullTime(ts: number) {
   box-shadow: inset 2px 2px 4px rgba(0, 0, 0, 0.18);
 }
 
+.custom-size {
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.custom-hint { font-size: 10.5px; }
+
+/* Round "!" badge. Reads as a hint affordance rather than an error, so it is
+   accent-coloured, not danger-coloured — the rules it carries are informational
+   and none of them actually block sending. */
+.hint-btn {
+  width: 18px; height: 18px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent-strong);
+  color: #fff;
+  font-size: 12px; font-weight: 700; line-height: 1;
+  font-family: inherit;
+  cursor: help;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.hint-btn:hover, .hint-btn.on { background: var(--accent-strong-hover); }
+.hint-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-strong);
+}
+
+.hint-pop { font-size: 11.5px; line-height: 1.6; }
+.hint-title { font-weight: 700; margin-bottom: 5px; }
+.hint-list { margin: 0; padding-left: 16px; }
+.hint-list li { margin: 1px 0; }
+.hint-pop code {
+  font-family: 'Consolas', 'Menlo', monospace;
+  font-size: 10.5px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.06);
+}
+.hint-foot {
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid var(--shadow-dark);
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+
+/* Advisory, not an error: these combinations are sent on purpose. */
+.warn-line {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  padding: 8px 11px;
+  border-radius: var(--radius-input);
+  box-shadow: inset 2px 2px 4px var(--shadow-dark), inset -2px -2px 4px var(--shadow-light);
+}
+.warn-line code {
+  font-family: 'Consolas', 'Menlo', monospace;
+  font-size: 10.5px;
+  color: var(--text-primary);
+}
+
 /* ===== Chips ===== */
 .chip-grid {
   display: grid;
@@ -940,7 +1219,21 @@ function fmtFullTime(ts: number) {
   min-height: 0;
   overflow: hidden;
   cursor: pointer;
-  background-color: var(--surface-sunken, #dfe4ea);
+  /* Backdrop comes from the bd-* class the header cycles. Deliberately not set
+     here — a background on this rule would out-specify the shared class and
+     freeze the control that makes transparency verifiable. */
+}
+
+/* Backdrop switch, matching the viewer's. The swatch is what keeps it readable
+   as a setting rather than as image content. */
+.bd-btn { gap: 6px; }
+.bd-swatch {
+  width: 12px; height: 12px;
+  border-radius: 3px;
+  border: 1px solid var(--shadow-dark);
+  flex-shrink: 0;
+  background-size: 8px 8px !important;
+  background-position: 0 0, 4px 4px !important;
 }
 
 .thumb {

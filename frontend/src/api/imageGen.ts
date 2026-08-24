@@ -37,6 +37,8 @@ export function edit(
   if (req.output_format) fd.append('output_format', req.output_format)
   if (req.output_compression != null) fd.append('output_compression', String(req.output_compression))
   if (req.moderation) fd.append('moderation', req.moderation)
+  if (req.background) fd.append('background', req.background)
+  if (req.input_fidelity) fd.append('input_fidelity', req.input_fidelity)
 
   images.forEach(f => fd.append('images', f, f.name))
   if (mask) fd.append('mask', mask, 'mask.png')

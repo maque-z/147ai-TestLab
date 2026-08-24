@@ -24,6 +24,25 @@ html, body, #app {
 .gap-16 { gap: 16px; }
 .text-muted { color: var(--text-muted); }
 
+/* ===== Image backdrops =====
+   Behind any image being inspected for transparency. Switching between them is
+   the only reliable way to tell a real alpha channel from a checkerboard the
+   model painted into the image itself: the real one changes with the backdrop,
+   the painted one does not. See components/imageGen/backdrop.ts. */
+.bd-checker {
+  background-color: #ffffff;
+  background-image:
+    linear-gradient(45deg, #d4dae1 25%, transparent 25%, transparent 75%, #d4dae1 75%),
+    linear-gradient(45deg, #d4dae1 25%, transparent 25%, transparent 75%, #d4dae1 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 8px 8px;
+}
+.bd-light { background: #ffffff; }
+.bd-dark  { background: #14181f; }
+/* Earns its place by being a colour no model paints as a background: anything
+   that survives this switch is image content, not transparency. */
+.bd-magenta { background: #ff00ff; }
+
 /* ===== Buttons =====
    Every clickable action uses these, so nothing reads as plain text. The raised
    shadow is the affordance; pressing it recesses, and disabled inverts to a

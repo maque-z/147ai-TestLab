@@ -73,6 +73,52 @@ export function imageMime(actual?: string, fallback?: string): string {
   return `image/${sub === 'jpg' ? 'jpeg' : sub}`
 }
 
+/** Whether a decoded image actually contains transparent pixels.
+ *
+ *  The reason this is measured in the browser rather than read from the file
+ *  header: a header only says the format *declares* an alpha channel, and a fully
+ *  opaque RGBA image declares one too. Nothing short of looking at the pixels can
+ *  tell "the API honoured background=transparent" apart from "the API returned a
+ *  white rectangle in a container that has room for alpha".
+ *
+ *  Sampled through a downscaled canvas — a 4K image is 8M pixels, and the answer
+ *  is boolean. Downscaling box-filters, so a transparent region smaller than one
+ *  probe pixel still lands as partial alpha instead of vanishing.
+ *
+ *  Returns null when the question cannot be answered: no 2d context, or the
+ *  canvas is tainted. Deliberately distinct from false, which is a real finding.
+ */
+export async function sampleAlpha(src: string, probe = 160): Promise<boolean | null> {
+  const img = new Image()
+  // Blob URLs are same-origin, but an API that returns a plain `url` is not, and
+  // reading those pixels would throw on a tainted canvas instead of returning.
+  img.crossOrigin = 'anonymous'
+  const loaded = await new Promise<boolean>(resolve => {
+    img.onload = () => resolve(true)
+    img.onerror = () => resolve(false)
+    img.src = src
+  })
+  if (!loaded || !img.naturalWidth) return null
+
+  try {
+    const c = document.createElement('canvas')
+    c.width = Math.min(probe, img.naturalWidth)
+    c.height = Math.min(probe, img.naturalHeight)
+    const ctx = c.getContext('2d', { willReadFrequently: true })
+    if (!ctx) return null
+    ctx.drawImage(img, 0, 0, c.width, c.height)
+    const { data } = ctx.getImageData(0, 0, c.width, c.height)
+    // 250 rather than 255: a box-filtered edge pixel of a fully transparent
+    // region lands just under the ceiling, and that is still transparency.
+    for (let i = 3; i < data.length; i += 4) {
+      if (data[i] < 250) return true
+    }
+    return false
+  } catch {
+    return null
+  }
+}
+
 /** Free the blob URLs a card holds. A job carries every image its request
  *  returned, so all of them are revoked. */
 export function revokeJob(job: PoolJob) {

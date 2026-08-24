@@ -41,6 +41,14 @@ export interface GenerateRequest {
   output_format?: string
   output_compression?: number
   moderation?: string
+  /** transparent / opaque / auto, default auto. The docs pair transparent with
+   *  png or webp and state jpeg cannot carry it; the jpeg combination is still
+   *  sent, on purpose. */
+  background?: string
+  /** Edits endpoint only. high / low, default low. Documented for "gpt-image-1
+   *  and gpt-image-1.5 and later models" without naming gpt-image-2 — so
+   *  whether it applies here is exactly what sending it answers. */
+  input_fidelity?: string
 }
 
 export interface GeneratedImage {
@@ -66,10 +74,13 @@ export interface GenerateResponse {
   /** What was actually sent upstream; undefined where the param was left unset. */
   size?: string
   quality?: string
+  background?: string
   /** The model the API says it used — reveals a gateway silently swapping models. */
   upstream_model?: string
   /** Response-level output_format claim, which can disagree with the magic bytes. */
   declared_format?: string
+  /** Response-level background claim, documented as a top-level field. */
+  declared_background?: string
 }
 
 /** The param matrix the UI expands into one upstream request per combination.
@@ -80,6 +91,10 @@ export interface ParamMatrix {
   qualities: string[]
   formats: string[]
   moderations: string[]
+  backgrounds: string[]
+  /** Expanded on the edit endpoint only — /generate does not take this param, so
+   *  including it there would send a field the endpoint drops in silence. */
+  inputFidelities: string[]
   n: number
   output_compression: number | null
   concurrency: number
@@ -115,6 +130,10 @@ export interface JobImage {
   // measured in the browser once the <img> decodes
   width?: number
   height?: number
+  /** Whether the decoded pixels actually carry transparency, sampled in the
+   *  browser. The only way to catch an API that accepts background=transparent
+   *  and returns an opaque image anyway. undefined == not sampled. */
+  hasAlpha?: boolean
 }
 
 /** One card in the results grid.
@@ -134,6 +153,9 @@ export interface ImageJob {
   quality?: string
   format?: string
   moderation?: string
+  background?: string
+  /** Edit mode only. */
+  inputFidelity?: string
   n: number
   compression?: number
   model: string
@@ -149,6 +171,8 @@ export interface ImageJob {
   activeIndex: number
   /** Format the API claimed in its response body. */
   declaredFormat?: string
+  /** Background the API claimed, when it claims one at all. */
+  declaredBackground?: string
   /** Model the API reported using, when it reports one. */
   actualModel?: string
 
@@ -173,7 +197,7 @@ export interface ApiError {
 /** Which param a probe is isolating. One factor at a time: every other param is
  *  left unset, so a mismatch can only be attributed to this one. */
 export type TestDimension =
-  | 'size' | 'quality' | 'format' | 'compression' | 'n' | 'edit'
+  | 'size' | 'quality' | 'format' | 'compression' | 'n' | 'edit' | 'background'
 
 /** One upstream request in the suite. `req` carries only the param under test. */
 export interface TestCase {
@@ -183,6 +207,10 @@ export interface TestCase {
   req: Omit<GenerateRequest, 'prompt'>
   /** Goes to /edit with the seed reference image instead of /generate. */
   isEdit?: boolean
+  /** This combination cannot work as specified (transparent alpha into a jpeg),
+   *  so there is no right answer to score — the probe exists to record what the
+   *  API does with it. Reported as `info`, never as pass/fail. */
+  expectRefusal?: boolean
 }
 
 /** pass/fail is a claim about the API, so it is only used where the response can
@@ -208,6 +236,9 @@ export interface TestResult {
   /** Measured in the browser after decode, not taken from the request. */
   width?: number
   height?: number
+  /** Sampled from the decoded pixels — settles whether background=transparent
+   *  actually produced transparency. */
+  hasAlpha?: boolean
   elapsedMs?: number
   inputTokens?: number
   outputTokens?: number

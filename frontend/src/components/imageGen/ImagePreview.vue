@@ -11,6 +11,17 @@
         <button class="tool wide" title="适应窗口 ( 0 )" @click="reset">适应</button>
         <button class="tool wide" title="原始大小 ( 1 )" @click="actualSize">1:1</button>
         <span class="divider" />
+        <!-- The transparency check: cycle the backdrop and watch whether the
+             image's background follows. A painted checkerboard will not. -->
+        <button
+          class="tool wide bd-btn"
+          title="切换背景 ( B ) — 真透明的图背景会跟着变，画上去的棋盘格不会"
+          @click="cycleBackdrop"
+        >
+          <span class="bd-swatch" :class="`bd-${backdrop}`" />
+          {{ BACKDROP_LABEL[backdrop] }}
+        </button>
+        <span class="divider" />
         <span v-if="current" class="caption" :title="captionFull">{{ caption }}</span>
         <span class="divider" />
         <button class="tool" title="关闭 ( Esc )" @click="close">×</button>
@@ -33,7 +44,7 @@
         ref="imgEl"
         :src="current.src"
         class="img"
-        :class="{ grabbing: panning }"
+        :class="[`bd-${backdrop}`, { grabbing: panning }]"
         :style="imgStyle"
         alt="预览"
         draggable="false"
@@ -52,6 +63,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { NModal } from 'naive-ui'
 import { fadeIn } from '@/utils/motion'
+import { backdrop, cycleBackdrop, BACKDROP_LABEL } from './backdrop'
 
 /** One entry in the flat, grid-wide list the arrows walk through. */
 export interface PreviewItem {
@@ -192,6 +204,7 @@ function onKey(e: KeyboardEvent) {
     case '-': case '_': zoomBy(1 / 1.25); break
     case '0': reset(); break
     case '1': actualSize(); break
+    case 'b': case 'B': cycleBackdrop(); break
     default: return
   }
   e.preventDefault()
@@ -231,6 +244,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   cursor: grab;
   user-select: none;
   will-change: transform;
+  /* Backdrop comes from the bd-* class, which the toolbar cycles. Nothing is set
+     here: a background declared on this rule would out-specify the shared class
+     and freeze the one control that makes transparency verifiable. */
 }
 .img.grabbing { cursor: grabbing; }
 
@@ -277,6 +293,20 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 }
 .tool.wide { font-size: 11px; }
 .tool:hover { background: rgba(255, 255, 255, 0.18); }
+
+/* Backdrop switch: carries a swatch of what it is about to show, so the control
+   reads as "the background is a setting" rather than as part of the image. */
+.bd-btn { gap: 6px; padding: 0 9px; }
+.bd-swatch {
+  width: 12px; height: 12px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  flex-shrink: 0;
+  /* The shared bd-* classes size their checkerboard for a full image; scale it
+     down so a 12px swatch still reads as a checkerboard rather than one square. */
+  background-size: 8px 8px !important;
+  background-position: 0 0, 4px 4px !important;
+}
 
 /* ===== Arrows ===== */
 .nav {

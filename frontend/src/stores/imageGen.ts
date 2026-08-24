@@ -4,7 +4,7 @@ import type {
   ImageConfig, GenerateRequest, GenMode, ImageJob, ParamMatrix, RefImage,
 } from '@/types'
 import * as imageGenApi from '@/api/imageGen'
-import { b64ToBlobUrl, imageMime, revokeJob, useBatchRunner } from '@/utils/batch'
+import { b64ToBlobUrl, imageMime, revokeJob, sampleAlpha, useBatchRunner } from '@/utils/batch'
 import { DEFAULT_PROMPT } from '@/utils/defaultPrompt'
 
 /** Binary inputs for an edit batch. Present == run against /edit instead of
@@ -31,27 +31,43 @@ function orDefault<T>(arr: T[]): (T | undefined)[] {
 
 /** Expand the matrix into one combination per upstream request.
  *  output_compression only applies to jpeg/webp, so png rows omit it — otherwise
- *  every compression value would produce an identical duplicate png request. */
-function buildCombos(m: ParamMatrix): Omit<GenerateRequest, 'prompt'>[] {
+ *  every compression value would produce an identical duplicate png request.
+ *
+ *  input_fidelity is an edits-only param, so on /generate it collapses to a
+ *  single undefined row rather than multiplying the batch by values the endpoint
+ *  would silently drop.
+ *
+ *  background is expanded unconditionally, including transparent against jpeg.
+ *  The docs say jpeg cannot carry transparency, and it is sent anyway, because
+ *  what the API does with an impossible combination is the finding.
+ */
+function buildCombos(m: ParamMatrix, mode: GenMode): Omit<GenerateRequest, 'prompt'>[] {
   const combos: Omit<GenerateRequest, 'prompt'>[] = []
+  const fidelities = mode === 'edit' ? orDefault(m.inputFidelities) : [undefined]
   for (const size of orDefault(m.sizes)) {
     for (const quality of orDefault(m.qualities)) {
       for (const output_format of orDefault(m.formats)) {
         for (const moderation of orDefault(m.moderations)) {
-          combos.push({
-            size,
-            quality,
-            output_format,
-            moderation,
-            n: m.n,
-            // undefined keys are dropped by JSON.stringify, so the backend sees
-            // "unset" rather than a value it would have to special-case.
-            output_compression:
-              (output_format === 'jpeg' || output_format === 'webp') &&
-              m.output_compression != null
-                ? m.output_compression
-                : undefined,
-          })
+          for (const background of orDefault(m.backgrounds)) {
+            for (const input_fidelity of fidelities) {
+              combos.push({
+                size,
+                quality,
+                output_format,
+                moderation,
+                background,
+                input_fidelity,
+                n: m.n,
+                // undefined keys are dropped by JSON.stringify, so the backend sees
+                // "unset" rather than a value it would have to special-case.
+                output_compression:
+                  (output_format === 'jpeg' || output_format === 'webp') &&
+                  m.output_compression != null
+                    ? m.output_compression
+                    : undefined,
+              })
+            }
+          }
         }
       }
     }
@@ -99,6 +115,8 @@ export const useImageGenStore = defineStore('imageGen', () => {
     qualities: [],
     formats: [],
     moderations: [],
+    backgrounds: [],
+    inputFidelities: [],
     n: 1,
     output_compression: null,
     concurrency: 50,
@@ -111,7 +129,11 @@ export const useImageGenStore = defineStore('imageGen', () => {
 
   const totalRequests = computed(() =>
     rowCount(matrix.sizes) * rowCount(matrix.qualities) *
-    rowCount(matrix.formats) * rowCount(matrix.moderations)
+    rowCount(matrix.formats) * rowCount(matrix.moderations) *
+    rowCount(matrix.backgrounds) *
+    // Mirrors buildCombos: this group only multiplies the batch on /edit, so the
+    // count in the header matches the number of requests actually sent.
+    (mode.value === 'edit' ? rowCount(matrix.inputFidelities) : 1)
   )
   const totalImages = computed(() => totalRequests.value * perRequest.value)
 
@@ -158,6 +180,8 @@ export const useImageGenStore = defineStore('imageGen', () => {
         qualities: [...matrix.qualities],
         formats: [...matrix.formats],
         moderations: [...matrix.moderations],
+        backgrounds: [...matrix.backgrounds],
+        inputFidelities: [...matrix.inputFidelities],
         n: perRequest.value,
       },
       mode.value === 'edit'
@@ -167,10 +191,9 @@ export const useImageGenStore = defineStore('imageGen', () => {
   }
 
   async function generateMatrix(promptText: string, matrixIn: ParamMatrix, edit?: EditInputs) {
-    const combos = buildCombos(matrixIn)
-    if (!combos.length) return
-
     const jobMode: GenMode = edit ? 'edit' : 'generate'
+    const combos = buildCombos(matrixIn, jobMode)
+    if (!combos.length) return
 
     // Seed every slot as pending so the grid shows placeholders immediately
     const seeded: ImageJob[] = combos.map(c => ({
@@ -181,6 +204,8 @@ export const useImageGenStore = defineStore('imageGen', () => {
       quality: c.quality,
       format: c.output_format,
       moderation: c.moderation,
+      background: c.background,
+      inputFidelity: c.input_fidelity,
       n: c.n ?? 1,
       compression: c.output_compression,
       model: config.value.model_id,
@@ -215,18 +240,26 @@ export const useImageGenStore = defineStore('imageGen', () => {
           // separately. `job.format` stays as requested so the card can show
           // requested → actual.
           const actual = img.image_format ?? undefined
+          const src = img.b64_json
+            // Falls back to the requested format, then png — see imageMime.
+            ? await b64ToBlobUrl(img.b64_json, imageMime(actual, job.format))
+            : img.url
           return {
-            src: img.b64_json
-              // Falls back to the requested format, then png — see imageMime.
-              ? await b64ToBlobUrl(img.b64_json, imageMime(actual, job.format))
-              : img.url,
+            src,
             bytes: img.byte_size ?? undefined,
             actualFormat: actual,
             revisedPrompt: img.revised_prompt ?? undefined,
+            // Only sampled where a background was actually requested: with no
+            // request there is no claim to check, and this costs a decode per
+            // image across a batch of up to 50.
+            hasAlpha: combo.background && src
+              ? (await sampleAlpha(src)) ?? undefined
+              : undefined,
           }
         }))
         job.activeIndex = 0
         job.declaredFormat = res.declared_format ?? undefined
+        job.declaredBackground = res.declared_background ?? undefined
         job.actualModel = res.upstream_model ?? undefined
         job.elapsedMs = res.elapsed_ms
         job.finishedAt = Date.now()
