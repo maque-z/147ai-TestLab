@@ -99,11 +99,19 @@
           </div>
         </template>
 
-        <!-- Prompt -->
+        <!-- Prompt. The inline box is a preview-sized entry point; the modal is
+             the real editor for anything long. Both bind the same store field,
+             so editing in either place is live in the other. -->
         <div class="field">
           <div class="field-label">
             提示词
             <span class="text-muted" style="font-weight:400">{{ store.prompt.length }} 字</span>
+            <span class="spacer" />
+            <button
+              class="btn btn-xs prompt-expand"
+              title="在大编辑框中编辑提示词"
+              @click="promptEditorOpen = true"
+            >⤢ 展开编辑</button>
           </div>
           <n-input
             v-model:value="store.prompt"
@@ -129,28 +137,35 @@
               @click="store.matrix.sizes = []"
             >清空</button>
           </div>
-          <!-- Scrollable wrapper so the table does not overflow on narrow screens -->
+          <!-- Transposed: ratios across, tiers down. With 15 ratios the old
+               ratio-per-row layout was 15 rows tall and pushed everything below
+               it off-screen; this is 3 rows and scrolls sideways instead, which
+               is the cheaper axis to spend. -->
           <div class="size-table-scroll">
             <table class="size-table">
             <thead>
               <tr>
-                <th class="ratio-th">比例</th>
-                <th v-for="(tier, ti) in TIERS" :key="tier" @click="toggleCol(ti)">
-                  {{ tier }}
-                </th>
+                <th class="ratio-th">尺寸</th>
+                <th
+                  v-for="row in SIZE_TABLE"
+                  :key="row.ratio"
+                  class="ratio-th-col"
+                  :title="`全选/清空 ${row.ratio}`"
+                  @click="toggleRow(row)"
+                >{{ row.ratio }}</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in SIZE_TABLE" :key="row.ratio">
-                <td class="ratio-td" @click="toggleRow(row)">{{ row.ratio }}</td>
+              <tr v-for="(tier, ti) in TIERS" :key="tier">
+                <td class="tier-td" :title="`全选/清空 ${tier}`" @click="toggleCol(ti)">{{ tier }}</td>
                 <td
-                  v-for="size in row.sizes"
-                  :key="size"
+                  v-for="row in SIZE_TABLE"
+                  :key="row.ratio"
                   class="size-cell"
-                  :class="{ on: store.matrix.sizes.includes(size) }"
-                  @click="toggleSize(size)"
+                  :class="{ on: store.matrix.sizes.includes(row.sizes[ti]) }"
+                  @click="toggleSize(row.sizes[ti])"
                 >
-                  {{ size.replace('x', '×') }}
+                  {{ row.sizes[ti].replace('x', '×') }}
                 </td>
               </tr>
             </tbody>
@@ -462,6 +477,32 @@
       <p>选择尺寸与参数，点右上角「生成」开始并发测试</p>
     </div>
 
+    <!-- Prompt editor modal. Content is never copied here — the textarea binds
+         the store's prompt directly, so there is one source of truth and closing
+         the modal cannot discard anything. -->
+    <n-modal
+      v-model:show="promptEditorOpen"
+      preset="card"
+      :title="store.mode === 'edit' ? '编辑提示词（编辑模式）' : '编辑提示词'"
+      style="width: min(760px, 94vw)"
+      :header-extra="() => `${store.prompt.length} 字`"
+      :bordered="false"
+      :segmented="{ content: true }"
+      @after-enter="focusPromptEditor"
+    >
+      <n-input
+        ref="promptEditorInput"
+        v-model:value="store.prompt"
+        type="textarea"
+        :rows="18"
+        :placeholder="store.mode === 'edit' ? '描述要如何修改这些图片...' : '描述你想生成的图片...'"
+        class="prompt-editor"
+      />
+      <template #footer>
+        <button class="btn btn-primary" @click="promptEditorOpen = false">完成</button>
+      </template>
+    </n-modal>
+
     <!-- Preview: walks every image in the grid, not just the current card -->
     <ImagePreview v-model:show="previewVisible" :items="previewItems" :start="previewStart" />
   </div>
@@ -469,7 +510,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
-import { NInput, NInputNumber, NPopover, NSpin } from 'naive-ui'
+import { NInput, NInputNumber, NModal, NPopover, NSpin } from 'naive-ui'
 import { useImageGenStore } from '@/stores/imageGen'
 import { TEST_CASE_COUNT, CONCURRENCY } from '@/stores/apiTest'
 import { enterCards, fadeInUp, pulse, countTo } from '@/utils/motion'
@@ -494,6 +535,18 @@ const previewVisible = ref(false)
 const previewStart = ref(0)
 const gridEl = ref<HTMLElement | null>(null)
 const bodyEl = ref<HTMLElement | null>(null)
+
+/** Big-editor modal for the prompt. Separate refs from the show state of the
+ *  preview modal — closing one must never close the other. */
+const promptEditorOpen = ref(false)
+const promptEditorInput = ref<InstanceType<typeof NInput> | null>(null)
+
+/** Put the cursor in the big box every time it opens, so typing can start
+ *  immediately — the whole reason the modal exists is that the inline box is
+ *  too small to edit comfortably. */
+function focusPromptEditor() {
+  promptEditorInput.value?.focus()
+}
 
 /** True when either batch endpoint is showing, i.e. not the test suite. Every
  *  matrix control and the results grid are scoped to this. */
@@ -535,19 +588,34 @@ function onHeadClick(e: MouseEvent) {
   store.paramsCollapsed = !store.paramsCollapsed
 }
 
-/** Official recommended sizes: 10 aspect ratios × 3 resolution tiers. */
+/** Official recommended sizes plus the ratios gpt-image-2's arbitrary-WxH rule
+ *  makes reachable: 15 aspect ratios × 3 resolution tiers.
+ *
+ *  Every value here satisfies the documented constraints — both sides divisible
+ *  by 16, ratio within 1:3–3:1, and no more than 3840×2160 pixels. 3:1 and 1:3
+ *  sit exactly on the boundary, which is the point: they are the widest and
+ *  tallest the API claims to accept.
+ *
+ *  Ordered widest → tallest so the transposed table reads as a sweep across
+ *  shapes rather than an arbitrary list.
+ */
 const TIERS = ['~1K', '~2K', '~4K'] as const
 const SIZE_TABLE = [
-  { ratio: '1:1',  sizes: ['1024x1024', '2048x2048', '2880x2880'] },
-  { ratio: '16:9', sizes: ['1280x720',  '2048x1152', '3840x2160'] },
-  { ratio: '9:16', sizes: ['720x1280',  '1152x2048', '2160x3840'] },
-  { ratio: '4:3',  sizes: ['1024x768',  '2048x1536', '3072x2304'] },
-  { ratio: '3:4',  sizes: ['768x1024',  '1536x2048', '2304x3072'] },
-  { ratio: '3:2',  sizes: ['1024x672',  '2048x1360', '3456x2304'] },
-  { ratio: '2:3',  sizes: ['672x1024',  '1360x2048', '2304x3456'] },
-  { ratio: '5:4',  sizes: ['1280x1024', '2560x2048', '3200x2560'] },
-  { ratio: '4:5',  sizes: ['1024x1280', '2048x2560', '2560x3200'] },
+  { ratio: '3:1',  sizes: ['1728x576',  '2304x768',  '3840x1280'] },
   { ratio: '21:9', sizes: ['1344x576',  '2016x864',  '3840x1648'] },
+  { ratio: '2:1',  sizes: ['1408x704',  '2048x1024', '3840x1920'] },
+  { ratio: '16:9', sizes: ['1280x720',  '2048x1152', '3840x2160'] },
+  { ratio: '3:2',  sizes: ['1024x672',  '2048x1360', '3456x2304'] },
+  { ratio: '4:3',  sizes: ['1024x768',  '2048x1536', '3072x2304'] },
+  { ratio: '5:4',  sizes: ['1280x1024', '2560x2048', '3200x2560'] },
+  { ratio: '1:1',  sizes: ['1024x1024', '2048x2048', '2880x2880'] },
+  { ratio: '4:5',  sizes: ['1024x1280', '2048x2560', '2560x3200'] },
+  { ratio: '3:4',  sizes: ['768x1024',  '1536x2048', '2304x3072'] },
+  { ratio: '2:3',  sizes: ['672x1024',  '1360x2048', '2304x3456'] },
+  { ratio: '9:16', sizes: ['720x1280',  '1152x2048', '2160x3840'] },
+  { ratio: '1:2',  sizes: ['704x1408',  '1024x2048', '1920x3840'] },
+  { ratio: '9:21', sizes: ['576x1344',  '864x2016',  '1648x3840'] },
+  { ratio: '1:3',  sizes: ['576x1728',  '768x2304',  '1280x3840'] },
 ]
 const ALL_SIZES = SIZE_TABLE.flatMap(r => r.sizes)
 
@@ -668,7 +736,12 @@ function selectAllSizes() {
   store.matrix.sizes = [...ALL_SIZES]
 }
 
-/** Row/column headers act as bulk toggles: fill if any are missing, else clear. */
+/** Header cells act as bulk toggles: fill if any are missing, else clear.
+ *
+ *  Names follow the data, not the layout. toggleRow takes one ratio's three
+ *  tiers — which the transposed table draws as a column — and toggleCol takes
+ *  one tier across every ratio, drawn as a row. Renaming them to match the
+ *  visuals would mean renaming them again the next time the table is turned. */
 function toggleRow(row: { sizes: string[] }) {
   const missing = row.sizes.filter(s => !store.matrix.sizes.includes(s))
   if (missing.length) store.matrix.sizes.push(...missing)
@@ -939,13 +1012,20 @@ function fmtFullTime(ts: number) {
 </script>
 
 <style scoped>
-.panel { display: flex; flex-direction: column; gap: 16px; }
+.panel { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 
 /* ===== Config card ===== */
 .config-card {
   background: var(--bg);
   border-radius: var(--radius-card);
   padding: 14px 18px;
+  /* A flex item's min-width defaults to auto, i.e. "never shrink below your
+     content". The size table is wider than a phone, so without this the card
+     grows to fit it and drags the whole page into horizontal overflow —
+     the prompt box and the chip rows get clipped along with it. Pinning it to 0
+     lets the card stay viewport-width and hands the overflow to the one element
+     that is meant to scroll: .size-table-scroll. */
+  min-width: 0;
 }
 
 .config-head {
@@ -1024,7 +1104,15 @@ function fmtFullTime(ts: number) {
   margin-top: 16px;
   padding-top: 16px;
   border-top: 1px solid var(--shadow-dark);
+  /* Same auto-min-width trap as .config-card above. */
+  min-width: 0;
 }
+
+/* Every direct child is a flex item and inherits the same default, so the
+   fields holding the table and the chip rows need it too. */
+.config-body > .field,
+.config-body > .chip-grid,
+.config-body > .num-grid { min-width: 0; }
 
 .field { display: flex; flex-direction: column; gap: 7px; }
 .field-label {
@@ -1048,10 +1136,26 @@ function fmtFullTime(ts: number) {
   line-height: 1.6;
 }
 
-/* ===== Size table ===== */
+/* The modal editor reads bigger than the inline box on purpose — text is being
+   worked on, not just clicked through. */
+.prompt-editor :deep(.n-input__textarea-el) {
+  background: transparent !important;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+/* Small expand affordance in the label row; keeps the inline box as the
+   quick-entry path while making the full editor discoverable. */
+.prompt-expand { flex-shrink: 0; }
+
+/* ===== Size table =====
+   Transposed: ratios across, tiers down. 15 ratios is too many to stack
+   vertically, so the long axis is horizontal and scrolls. */
 .size-table-scroll {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  /* Room for the scrollbar so it never sits on top of the last row's cells */
+  padding-bottom: 4px;
 }
 .size-table {
   border-collapse: separate;
@@ -1066,20 +1170,32 @@ function fmtFullTime(ts: number) {
   cursor: pointer;
   user-select: none;
   border-radius: 6px;
+  white-space: nowrap;
 }
 .size-table th:hover:not(.ratio-th) { color: var(--accent-strong); }
 .ratio-th { cursor: default; color: var(--text-muted); }
 
-.ratio-td {
+/* The first column pins so the tier label stays readable while the ratios
+   scroll past it — with 15 columns the row identity is otherwise lost. */
+.ratio-th,
+.tier-td {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg);
+}
+
+.tier-td {
   padding: 5px 8px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text-muted);
   cursor: pointer;
   user-select: none;
   border-radius: 6px;
   text-align: right;
+  white-space: nowrap;
 }
-.ratio-td:hover { color: var(--accent-strong); }
+.tier-td:hover { color: var(--accent-strong); }
 
 .size-cell {
   padding: 5px 10px;
@@ -1087,6 +1203,7 @@ function fmtFullTime(ts: number) {
   cursor: pointer;
   user-select: none;
   text-align: center;
+  white-space: nowrap;
   color: var(--text-primary);
   box-shadow: 2px 2px 4px var(--shadow-dark), -2px -2px 4px var(--shadow-light);
   transition: color 0.15s, box-shadow 0.15s;
@@ -1292,7 +1409,7 @@ function fmtFullTime(ts: number) {
 .canvas-state.err { color: var(--danger); }
 .err-text {
   font-size: 10.5px; line-height: 1.4;
-  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical;
+  display: -webkit-box; -webkit-line-clamp: 4; line-clamp: 4; -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
@@ -1361,14 +1478,71 @@ function fmtFullTime(ts: number) {
 .test-panel-wrapper { min-height: 600px; }
 
 /* ===== Responsive ===== */
+
+/* Touch devices: hover never fires, so anything that only appears on hover is
+   unreachable. The carousel arrows are the case that matters — without this a
+   phone user cannot see images 2..n of an n>1 result at all. */
+@media (hover: none) {
+  .nav { opacity: 1; background: rgba(0, 0, 0, 0.45); }
+  /* Comfortable tap targets. 26×38 is fine for a mouse, small for a thumb. */
+  .nav { width: 34px; height: 46px; }
+  /* Padding alone leaves these at ~28px, since they size to their text. On a
+     table cell `min-height` does nothing — the spec leaves it undefined there —
+     so `height` is the property that works, and on a table cell it behaves as a
+     minimum rather than a fixed size. 36px plus the 4px table spacing is the
+     practical compromise between reachable and fitting 15 columns. */
+  .size-cell, .tier-td, .size-table th {
+    padding-top: 8px; padding-bottom: 8px;
+    height: 36px;
+    vertical-align: middle;
+  }
+  .chip {
+    padding-top: 8px; padding-bottom: 8px;
+    min-height: 36px;
+    display: inline-flex; align-items: center;
+  }
+  .hint-btn { width: 24px; height: 24px; font-size: 14px; }
+}
+
 @media (max-width: 640px) {
   .config-card { padding: 10px 12px; }
   /* Tighter card grid on phones — one column is fine */
   .results-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
   /* Allow test panel to be auto-height on mobile rather than a fixed min */
   .test-panel-wrapper { min-height: 0; }
+  /* modal editor: fewer rows so it never fills the whole phone screen */
+  .prompt-editor :deep(.n-input__textarea-el) { font-size: 13px; height: 55vh; }
+
   /* meta-row3 col widths: give the label a bit less room */
   .meta-head,
   .meta-row3 { grid-template-columns: auto 1fr auto; gap: 4px; }
+
+  /* The header strip wraps on a narrow screen; without this the tabs and the
+     count badge collide before the actions drop to their own line. */
+  .config-head { gap: 8px 10px; }
+  .head-actions { margin-left: 0; width: 100%; justify-content: flex-end; }
+  .tabs { flex: 1; }
+  .tab { flex: 1; padding: 4px 8px; }
+
+  /* 15 ratios cannot fit; the table scrolls sideways and the sticky first
+     column keeps the tier label anchored while it does. */
+  .size-table { font-size: 11px; border-spacing: 3px; }
+  .size-cell { padding-left: 7px; padding-right: 7px; }
+  .tier-td { padding-left: 4px; padding-right: 6px; }
+
+  /* Wrap rather than squeeze: the input, the 添加 button and the "!" badge each
+     stay a usable size and take a second line when they need one. */
+  .custom-size > :deep(.n-input) { max-width: none !important; flex: 1 1 140px; }
+  .custom-hint { flex-basis: 100%; }
+
+  /* Two per row instead of auto-fit's one-per-row at this width */
+  .num-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .chip-grid { gap: 12px; }
+}
+
+/* Very narrow (small phones in portrait). */
+@media (max-width: 380px) {
+  .num-grid { grid-template-columns: 1fr; }
+  .count-badge { padding: 3px 8px; font-size: 11px; }
 }
 </style>

@@ -244,6 +244,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   cursor: grab;
   user-select: none;
   will-change: transform;
+  /* Panning is driven by pointer events. Without this the browser claims the
+     drag for its own scroll/zoom on a touch screen and pointermove never
+     arrives, so a zoomed-in image cannot be moved. Same reason MaskEditor's
+     canvas sets it. */
+  touch-action: none;
   /* Backdrop comes from the bd-* class, which the toolbar cycles. Nothing is set
      here: a background declared on this rule would out-specify the shared class
      and freeze the one control that makes transparency verifiable. */
@@ -326,4 +331,32 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .nav:hover { background: rgba(20, 26, 34, 0.85); }
 .nav.prev { left: 18px; }
 .nav.next { right: 18px; }
+
+/* ===== Responsive ===== */
+@media (max-width: 640px) {
+  /* Nine items in one row overflow a phone. Wrapping keeps every control
+     reachable instead of pushing the close button off the edge. */
+  .toolbar {
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: 96vw;
+    border-radius: 14px;
+    top: 8px;
+    gap: 4px 6px;
+  }
+  .caption { max-width: 88vw; order: 1; flex-basis: 100%; text-align: center; }
+  /* The dividers only make sense in a single row */
+  .divider { display: none; }
+
+  .nav { width: 32px; height: 56px; font-size: 24px; }
+  .nav.prev { left: 6px; }
+  .nav.next { right: 6px; }
+
+  .img { max-width: 96vw; max-height: 74vh; }
+}
+
+/* Touch: the viewer is driven by pinch/drag, so the buttons need real targets. */
+@media (hover: none) {
+  .tool { min-width: 34px; height: 32px; }
+}
 </style>
