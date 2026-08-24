@@ -128,6 +128,7 @@ def build_response(data: dict, *, cfg, prompt: str, payload: dict,
         prompt=prompt,
         size=payload.get("size"),
         quality=payload.get("quality"),
+        background=payload.get("background"),
         elapsed_ms=elapsed_ms,
         request_id=request_id,
         input_tokens=usage.get("input_tokens"),
@@ -136,13 +137,19 @@ def build_response(data: dict, *, cfg, prompt: str, payload: dict,
         output_tokens=usage.get("output_tokens"),
         upstream_model=data.get("model"),
         declared_format=declared_format,
+        declared_background=data.get("background"),
     )
 
 
-def optional_params(*, size, quality, output_format, output_compression, moderation) -> dict:
+def optional_params(*, size, quality, output_format, output_compression, moderation,
+                    background, input_fidelity=None) -> dict:
     """The params shared by both endpoints, with anything unset left out entirely
     rather than sent as a guessed default — that is the only way to observe what
-    the API itself picks."""
+    the API itself picks.
+
+    `input_fidelity` is edits-only, so it defaults to None and simply never
+    appears in a /generate payload.
+    """
     params: dict = {}
     if size:
         params["size"] = size
@@ -154,6 +161,13 @@ def optional_params(*, size, quality, output_format, output_compression, moderat
             params["output_compression"] = output_compression
     if moderation:
         params["moderation"] = moderation
+    # Sent verbatim even where the docs say it cannot work — transparent against
+    # jpeg has no container for the alpha channel, and how the API answers that
+    # is what this tool is for. Not filtered here, and not in the frontend.
+    if background:
+        params["background"] = background
+    if input_fidelity:
+        params["input_fidelity"] = input_fidelity
     return params
 
 
@@ -196,13 +210,15 @@ async def generate(
             output_format=body.output_format,
             output_compression=body.output_compression,
             moderation=body.moderation,
+            background=body.background,
         ),
     }
 
     logger.info(
-        "POST /v1/images/generations  size=%s quality=%s",
+        "POST /v1/images/generations  size=%s quality=%s background=%s",
         payload.get("size", "<default>"),
         payload.get("quality", "<default>"),
+        payload.get("background", "<default>"),
     )
 
     data, elapsed_ms, request_id = await call_upstream(
@@ -229,6 +245,12 @@ async def edit(
         None, ge=COMPRESSION_MIN, le=COMPRESSION_MAX
     ),
     moderation: str | None = Form(None, max_length=MAX_PARAM_LEN),
+    background: str | None = Form(None, max_length=MAX_PARAM_LEN),
+    # Edits-only. Documented as high/low, default low, supported on "gpt-image-1
+    # and gpt-image-1.5 and later models" — wording that implies gpt-image-2
+    # without ever naming it, which is exactly the kind of gap worth probing
+    # rather than assuming either way.
+    input_fidelity: str | None = Form(None, max_length=MAX_PARAM_LEN),
     cfg: UpstreamConfig = Depends(get_image_config),
 ):
     """Run one edit combination against /v1/images/edits.
@@ -305,15 +327,18 @@ async def edit(
             output_format=output_format,
             output_compression=output_compression,
             moderation=moderation,
+            background=background,
+            input_fidelity=input_fidelity,
         ),
     }
     # multipart carries everything as text; httpx sets the boundary itself.
     form = {k: str(v) for k, v in payload.items()}
 
     logger.info(
-        "POST /v1/images/edits  images=%d mask=%s size=%s quality=%s",
+        "POST /v1/images/edits  images=%d mask=%s size=%s quality=%s background=%s",
         len(images), "yes" if len(files) > len(images) else "no",
         payload.get("size", "<default>"), payload.get("quality", "<default>"),
+        payload.get("background", "<default>"),
     )
 
     data, elapsed_ms, request_id = await call_upstream(

@@ -28,9 +28,6 @@ class GenerateRequest(BaseModel):
     Every param is optional and omitted from the upstream payload when None —
     "unset" means "let the API apply its own default", which is a distinct case
     from any value the user could pick.
-
-    No `background`: gpt-image-2 rejects background=transparent outright, which
-    leaves opaque and auto meaning the same thing, so the param tests nothing.
     """
     prompt: str = Field(min_length=1, max_length=MAX_PROMPT_LEN)
     size: Optional[str] = Field(default=None, max_length=MAX_PARAM_LEN)
@@ -41,6 +38,14 @@ class GenerateRequest(BaseModel):
         default=None, ge=COMPRESSION_MIN, le=COMPRESSION_MAX
     )
     moderation: Optional[str] = Field(default=None, max_length=MAX_PARAM_LEN)
+    # transparent / opaque / auto, default auto. This param was previously left
+    # out on the grounds that gpt-image-2 refused transparent outright — true
+    # when that was written, and no longer: the changelog entry dated 2026-08-20
+    # put transparency in preview for gpt-image-2 and gpt-image-2-2026-04-21.
+    # Alpha needs a container that can carry it, so the docs pair transparent
+    # with png or webp and state jpeg cannot do it. The jpeg combination is still
+    # sendable here, because what the API does with it is worth observing.
+    background: Optional[str] = Field(default=None, max_length=MAX_PARAM_LEN)
 
 
 class GeneratedImage(BaseModel):
@@ -70,6 +75,7 @@ class GenerateResponse(BaseModel):
     # None means the param was left unset and the API chose for itself.
     size: Optional[str] = None
     quality: Optional[str] = None
+    background: Optional[str] = None
     # The model the API says it used. Not part of the official response shape, but
     # gateways often include it — and a value that differs from the requested
     # model is exactly the silent-swap case this tool exists to catch.
@@ -77,3 +83,8 @@ class GenerateResponse(BaseModel):
     # Response-level output_format claim. Kept separate from each image's
     # magic-byte format so a disagreement between the two stays visible.
     declared_format: Optional[str] = None
+    # Response-level background claim, kept separate from the echo above for the
+    # same reason. Documented as a top-level field alongside output_format,
+    # quality and size, but read defensively all the same — a gateway that
+    # omits it is a finding, not a crash.
+    declared_background: Optional[str] = None
