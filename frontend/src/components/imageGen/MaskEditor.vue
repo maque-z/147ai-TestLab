@@ -112,8 +112,14 @@ interface Stroke { points: Point[]; size: number; erase: boolean }
 const mode = ref<'brush' | 'import'>('brush')
 /** Master switch. Kept separate from "is anything painted" so a drawing can be
  *  disabled and re-enabled without losing it — which is what makes an
- *  with-mask/without-mask comparison possible. */
-const enabled = ref(true)
+ *  with-mask/without-mask comparison possible.
+ *
+ *  Off by default: a mask changes what the edit endpoint is being asked to do,
+ *  and the baseline every other run is compared against is the one without it.
+ *  Starting enabled also meant a stray brush stroke silently attached a mask to
+ *  the whole batch. Turning it on is one click, and the status line below states
+ *  which of the two is in effect on every render. */
+const enabled = ref(false)
 const erasing = ref(false)
 const brush = ref(48)
 /** Strokes are pushed with markRaw (see onDown), so the array stays reactive —
