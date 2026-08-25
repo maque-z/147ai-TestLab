@@ -21,7 +21,12 @@ from sqlalchemy.orm import Session
 
 from ..core.database import get_db
 from ..core.deps import UpstreamConfig, get_banana_config, get_current_user
-from ..core.imaging import b64_byte_size, detect_format, image_dimensions
+from ..core.imaging import (
+    b64_byte_size,
+    detect_format,
+    has_alpha_channel,
+    image_dimensions,
+)
 from ..crud import user as user_crud
 from ..schemas.banana_config import BananaConfigOut, BananaConfigUpdate
 from ..schemas.banana_gen import (
@@ -34,7 +39,8 @@ from ..schemas.banana_gen import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/banana-gen", tags=["banana-gen"])
 
-# The five categories the official example sets, applied together with one
+# The six documented categories supported by the native safetySettings shape;
+# callers may send only the categories they want to override.
 # threshold. Sending a subset leaves the rest at the upstream default, which would
 # make a "safety off" run only partly off.
 SAFETY_CATEGORIES = (
@@ -43,6 +49,7 @@ SAFETY_CATEGORIES = (
     "HARM_CATEGORY_SEXUALLY_EXPLICIT",
     "HARM_CATEGORY_DANGEROUS_CONTENT",
     "HARM_CATEGORY_CIVIC_INTEGRITY",
+    "HARM_CATEGORY_JAILBREAK",
 )
 
 # A model id lands in the URL path, so anything that could climb out of it or
@@ -138,6 +145,7 @@ def describe_image(b64: str, declared_mime: str | None,
     byte_size = b64_byte_size(b64)
     real_format = None
     dims = None
+    decoded = None
     try:
         # 32 base64 chars decode to 24 bytes — enough for every signature, and for
         # a PNG's IHDR, which is where the dimensions live.
@@ -151,9 +159,18 @@ def describe_image(b64: str, declared_mime: str | None,
     # fall back to decoding the whole payload when the cheap read came up empty.
     if dims is None:
         try:
-            dims = image_dimensions(base64.b64decode(b64))
+            decoded = base64.b64decode(b64)
+            dims = image_dimensions(decoded)
         except Exception:
             dims = None
+
+    # PNG colour type is available in the header. Other formats currently have
+    # no portable server-side alpha answer, so retain None rather than guessing.
+    alpha = None
+    try:
+        alpha = has_alpha_channel(decoded or base64.b64decode(b64[:64]))
+    except Exception:
+        pass
 
     return BananaImage(
         b64_json=b64,
@@ -163,6 +180,7 @@ def describe_image(b64: str, declared_mime: str | None,
         width=dims[0] if dims else None,
         height=dims[1] if dims else None,
         candidate_index=candidate_index,
+        has_alpha_channel=alpha,
     )
 
 
@@ -197,16 +215,64 @@ def build_native_payload(body: BananaGenerateRequest) -> dict:
         generation["maxOutputTokens"] = body.max_output_tokens
     if body.stop_sequences:
         generation["stopSequences"] = body.stop_sequences
+    if body.top_p is not None:
+        generation["topP"] = body.top_p
+    if body.top_k is not None:
+        generation["topK"] = body.top_k
+    if body.seed is not None:
+        generation["seed"] = body.seed
+
+    # Gemini 2.5 image and older gateway aliases reject thinkingConfig. Also,
+    # includeThoughts is only legal when thinking itself is enabled; sending
+    # includeThoughts=false alone produces the exact upstream error shown in the UI.
+    model_id = (body.model_id or '').lower()
+    thinking_supported = (
+        bool(model_id)
+        and '2.5' not in model_id
+        and ('gemini-3' in model_id or 'nano-banana' in model_id)
+    )
+    thinking_enabled = thinking_supported and bool(body.thinking_level or body.thinking_budget is not None)
+    thinking: dict = {}
+    if thinking_enabled and body.thinking_level:
+        thinking["thinkingLevel"] = body.thinking_level
+    if thinking_enabled and body.include_thoughts:
+        thinking["includeThoughts"] = True
+    if thinking_enabled and body.thinking_budget is not None:
+        thinking["thinkingBudget"] = body.thinking_budget
+    if thinking:
+        generation["thinkingConfig"] = thinking
+
+    parts: list[dict] = []
+    for image in body.reference_images or []:
+        parts.append({
+            "inlineData": {
+                "mimeType": image.mime_type,
+                "data": image.data,
+            }
+        })
+    prompt = body.prompt
+    if body.mask_image:
+        parts.append({
+            "inlineData": {
+                "mimeType": body.mask_image.mime_type,
+                "data": body.mask_image.data,
+            }
+        })
+        prompt += (
+            "\n\n蒙版探测说明：最后一张图片是与第一张参考图等尺寸的 PNG 蒙版；"
+            "请只重绘蒙版的透明区域，保留其他区域不变。"
+        )
+    parts.append({"text": prompt})
 
     payload: dict = {
-        "contents": [{"role": "user", "parts": [{"text": body.prompt}]}],
+        "contents": [{"role": "user", "parts": parts}],
     }
     if generation:
         payload["generationConfig"] = generation
-    if body.safety_threshold:
+    if body.safety_settings:
         payload["safetySettings"] = [
-            {"category": c, "threshold": body.safety_threshold}
-            for c in SAFETY_CATEGORIES
+            {"category": item.category, "threshold": item.threshold}
+            for item in body.safety_settings
         ]
     return payload
 
@@ -359,8 +425,10 @@ async def generate(
     payload = build_native_payload(body)
 
     logger.info(
-        "POST /v1beta/models/%s:generateContent  ratio=%s size=%s modalities=%s",
+        "POST /v1beta/models/%s:generateContent  refs=%d mask=%s ratio=%s size=%s modalities=%s",
         model,
+        len(body.reference_images or []),
+        "yes" if body.mask_image else "no",
         body.aspect_ratio or "<default>",
         body.image_size or "<default>",
         ",".join(body.response_modalities or []) or "<omitted>",

@@ -10,7 +10,7 @@ upstream payload when None, because "unset" ("let the API apply its own
 default") is a distinct case from any value the user could pick.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 
 from .image_gen import MAX_PARAM_LEN, MAX_PROMPT_LEN
@@ -23,6 +23,51 @@ TEMPERATURE_MIN, TEMPERATURE_MAX = 0.0, 4.0
 CANDIDATE_MIN, CANDIDATE_MAX = 1, 32
 MAX_OUTPUT_TOKENS_MAX = 1_000_000
 MAX_LIST_ITEMS = 16
+
+
+class BananaReferenceImage(BaseModel):
+    """One inlineData part used by Gemini native image editing."""
+
+    mime_type: str = Field(max_length=64)
+    data: str
+
+    @field_validator("mime_type")
+    @classmethod
+    def validate_mime(cls, value: str) -> str:
+        if value not in {"image/png", "image/jpeg", "image/webp"}:
+            raise ValueError("参考图仅支持 PNG、JPEG 或 WebP")
+        return value
+
+
+SAFETY_THRESHOLD_VALUES = (
+    'HARM_BLOCK_THRESHOLD_UNSPECIFIED', 'BLOCK_LOW_AND_ABOVE',
+    'BLOCK_MEDIUM_AND_ABOVE', 'BLOCK_ONLY_HIGH', 'BLOCK_NONE', 'OFF',
+)
+SAFETY_CATEGORY_VALUES = {
+    'HARM_CATEGORY_HARASSMENT', 'HARM_CATEGORY_HATE_SPEECH',
+    'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'HARM_CATEGORY_DANGEROUS_CONTENT',
+    'HARM_CATEGORY_CIVIC_INTEGRITY', 'HARM_CATEGORY_JAILBREAK',
+}
+THINKING_LEVEL_VALUES = {'THINKING_LEVEL_UNSPECIFIED', 'MINIMAL', 'LOW', 'MEDIUM', 'HIGH'}
+
+
+class BananaSafetySetting(BaseModel):
+    category: str = Field(max_length=MAX_PARAM_LEN)
+    threshold: str = Field(max_length=MAX_PARAM_LEN)
+
+    @field_validator('threshold')
+    @classmethod
+    def validate_threshold(cls, value: str) -> str:
+        if value not in SAFETY_THRESHOLD_VALUES:
+            raise ValueError('安全阈值不是 Gemini 官方枚举值')
+        return value
+
+    @field_validator('category')
+    @classmethod
+    def validate_category(cls, value: str) -> str:
+        if value not in SAFETY_CATEGORY_VALUES:
+            raise ValueError('安全类别不是 Gemini 官方枚举值')
+        return value
 
 
 class BananaGenerateRequest(BaseModel):
@@ -65,12 +110,33 @@ class BananaGenerateRequest(BaseModel):
         default=None, ge=1, le=MAX_OUTPUT_TOKENS_MAX
     )
     stop_sequences: Optional[List[str]] = Field(
-        default=None, max_length=MAX_LIST_ITEMS
+        default=None, max_length=5
     )
+    top_p: Optional[float] = Field(default=None, ge=0, le=1)
+    top_k: Optional[int] = Field(default=None, ge=1)
+    seed: Optional[int] = None
 
-    # safetySettings: one threshold applied to all five documented categories,
-    # which is how the official example sets them. None omits the block entirely.
-    safety_threshold: Optional[str] = Field(default=None, max_length=MAX_PARAM_LEN)
+    # Editing uses the same endpoint and parameters as generation; supplying
+    # inlineData parts before the text part changes the task into an edit.
+    reference_images: Optional[List[BananaReferenceImage]] = Field(
+        default=None, max_length=16
+    )
+    # Gemini documents no dedicated mask field. This probe is normalised by the
+    # backend into a final inlineData part plus an explicit text instruction.
+    mask_image: Optional[BananaReferenceImage] = None
+
+    # safetySettings: one object per category. None omits the block entirely.
+    safety_settings: Optional[List[BananaSafetySetting]] = Field(default=None, max_length=16)
+    thinking_level: Optional[str] = Field(default=None, max_length=MAX_PARAM_LEN)
+    include_thoughts: Optional[bool] = None
+    thinking_budget: Optional[int] = Field(default=None, ge=-1, le=1_000_000)
+
+    @field_validator('thinking_level')
+    @classmethod
+    def validate_thinking_level(cls, value: str | None) -> str | None:
+        if value is not None and value not in THINKING_LEVEL_VALUES:
+            raise ValueError('思考等级不是 Gemini 官方枚举值')
+        return value
 
 
 class BananaChatRequest(BaseModel):
@@ -105,6 +171,10 @@ class BananaImage(BaseModel):
     # Which candidate this image came from, so a candidateCount > 1 response can
     # be told apart from one candidate that returned several parts.
     candidate_index: Optional[int] = None
+    # Container-level alpha declaration, read from the actual returned bytes.
+    # This is distinct from whether any pixel is transparent, which the browser
+    # samples after decoding.
+    has_alpha_channel: Optional[bool] = None
 
 
 class BananaGenerateResponse(BaseModel):

@@ -35,10 +35,36 @@ def ensure_schema() -> None:
     for table in ("user_image_configs", "user_banana_configs"):
         _ensure_unique_user_id(table)
 
+    _ensure_banana_config_columns()
+
     # Order matters: _promote_default_admin writes is_admin, so the column has
     # to exist first.
     _ensure_user_columns()
     _promote_default_admin()
+
+
+def _ensure_banana_config_columns() -> None:
+    """Backfill columns added to the Gemini configuration table.
+
+    SQLite's create_all does not alter an existing table. The JSON list is stored
+    as text by SQLite, with an empty list as the migration default.
+    """
+    with engine.begin() as conn:
+        if not conn.exec_driver_sql(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_banana_configs'"
+        ).first():
+            return
+        existing = {
+            row[1] for row in conn.exec_driver_sql(
+                "PRAGMA table_info(user_banana_configs)"
+            )
+        }
+        if "custom_models" not in existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE user_banana_configs "
+                "ADD COLUMN custom_models TEXT NOT NULL DEFAULT '[]'"
+            )
+            logger.info("Added column user_banana_configs.custom_models.")
 
 
 def _ensure_unique_user_id(table: str) -> None:

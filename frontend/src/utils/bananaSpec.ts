@@ -10,11 +10,13 @@
 /** Models the native surface documents, with the traits the doc's model table
  *  states for each. */
 export const NATIVE_MODELS = [
-  { id: 'gemini-3-pro-image-preview',      note: '质量最高 · 1K/2K/4K' },
-  { id: 'gemini-3.1-flash-image-preview',  note: '速度快 · 512/1K · 比例最多' },
+  { id: 'gemini-3.1-flash-image',          note: '官方 · Nano Banana 2 · 512/1K/2K/4K' },
+  { id: 'gemini-3-pro-image',              note: '官方 · Nano Banana Pro · 1K/2K/4K' },
   { id: 'gemini-3.1-flash-lite-image',     note: '更快更省 · 仅 1K · 比例最多' },
-  { id: 'gemini-2.5-flash-image-preview',  note: 'Flash 系列' },
   { id: 'gemini-2.5-flash-image',          note: 'Flash 系列' },
+  { id: 'gemini-3.1-flash-image-preview',  note: '网关兼容别名 · 旧 preview 名称' },
+  { id: 'gemini-3-pro-image-preview',      note: '网关兼容别名 · 旧 preview 名称' },
+  { id: 'gemini-2.5-flash-image-preview',  note: '网关兼容别名 · 旧 preview 名称' },
 ] as const
 
 /** The OpenAI-compatible doc names exactly one model for image output. */
@@ -29,10 +31,10 @@ export const OPENAI_MODELS = [
  *  because anyone would want to send it.
  */
 export const IMAGE_SIZES = [
-  { value: '512', models: ['gemini-3.1-flash-image-preview'] },
+  { value: '512', models: ['gemini-3.1-flash-image', 'gemini-3.1-flash-image-preview'] },
   { value: '1K',  models: '*' },
-  { value: '2K',  models: ['gemini-3-pro-image-preview'] },
-  { value: '4K',  models: ['gemini-3-pro-image-preview'] },
+  { value: '2K',  models: ['gemini-3.1-flash-image', 'gemini-3-pro-image', 'gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview'] },
+  { value: '4K',  models: ['gemini-3.1-flash-image', 'gemini-3-pro-image', 'gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview'] },
   { value: '2k',  models: [], probe: '文档称小写会被忽略；2026-08 实测 api.147ai.cn 仍按 2K 执行' },
 ] as const
 
@@ -47,8 +49,9 @@ export const ALL_RATIOS = [...COMMON_RATIOS, ...FLASH2_ONLY_RATIOS]
 
 /** The 3.1 models, which the doc's ratio table calls "Flash 2（3.1）". */
 const FLASH2_MODELS = [
-  'gemini-3.1-flash-image-preview',
+  'gemini-3.1-flash-image',
   'gemini-3.1-flash-lite-image',
+  'gemini-3.1-flash-image-preview',
 ]
 
 /** responseModalities combinations worth sending. The doc requires "IMAGE" and
@@ -60,11 +63,45 @@ export const MODALITY_SETS = [
 ] as const
 
 export const SAFETY_THRESHOLDS = [
+  'HARM_BLOCK_THRESHOLD_UNSPECIFIED',
   'BLOCK_NONE',
   'BLOCK_ONLY_HIGH',
   'BLOCK_MEDIUM_AND_ABOVE',
   'BLOCK_LOW_AND_ABOVE',
+  'OFF',
 ] as const
+
+export const SAFETY_CATEGORIES = [
+  { value: 'HARM_CATEGORY_HARASSMENT', label: '骚扰' },
+  { value: 'HARM_CATEGORY_HATE_SPEECH', label: '仇恨言论' },
+  { value: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', label: '露骨色情' },
+  { value: 'HARM_CATEGORY_DANGEROUS_CONTENT', label: '危险内容' },
+  { value: 'HARM_CATEGORY_CIVIC_INTEGRITY', label: '公民诚信' },
+  { value: 'HARM_CATEGORY_JAILBREAK', label: '越狱提示' },
+] as const
+
+export const THINKING_LEVELS = [
+  { value: 'THINKING_LEVEL_UNSPECIFIED', label: '跟随默认', note: '由模型决定思考等级' },
+  { value: 'MINIMAL', label: '最少', note: '响应更快' },
+  { value: 'LOW', label: '低', note: '轻量推理' },
+  { value: 'MEDIUM', label: '中', note: '平衡质量与速度' },
+  { value: 'HIGH', label: '高', note: '复杂构图与文字' },
+] as const
+
+/** Gemini 3 image models expose thinkingConfig. Gemini 2.5 image and unknown
+ * gateway aliases must not receive it blindly: the upstream rejects the whole
+ * request with "Thinking is not enabled for this model". Unknown custom names
+ * are left enabled because a gateway may expose a Gemini 3-compatible alias.
+ */
+export function supportsThinking(model: string): boolean {
+  const id = model.trim().toLowerCase()
+  if (!id || id.includes('2.5')) return false
+  return id.includes('gemini-3') || id.includes('nano-banana')
+}
+
+export const DEFAULT_SAFETY_SETTINGS = Object.fromEntries(
+  SAFETY_CATEGORIES.map(category => [category.value, null]),
+)
 
 /** finishReason values the doc lists, with what each one means. */
 export const FINISH_REASONS: Record<string, string> = {
@@ -80,27 +117,35 @@ export const FINISH_REASONS: Record<string, string> = {
  *
  *  Google maps by equal area rather than longest edge, so these cannot be
  *  derived from the ratio — they are transcribed from the doc's three tables.
- *  512 and the extreme Flash-2 ratios have no published table, so they are
- *  absent here and the helpers report "not documented" for them.
+ *  The 512 row is only documented for 3.1 Flash Image; other models are
+ *  flagged by sizeSupported even though the shared table keeps the pixels visible.
  */
 export const DOC_PIXELS: Record<string, Record<string, string>> = {
+  '512': {
+    '1:1': '512x512', '1:4': '256x1024', '4:1': '1024x256', '1:8': '192x1536', '8:1': '1536x192',
+    '2:3': '424x632', '3:2': '632x424', '3:4': '448x600', '4:3': '600x448',
+    '4:5': '464x576', '5:4': '576x464', '9:16': '384x688', '16:9': '688x384', '21:9': '792x168',
+  },
   '1K': {
-    '1:1': '1024x1024', '4:3': '1184x864', '3:4': '864x1184',
-    '3:2': '1248x832', '2:3': '832x1248', '16:9': '1344x768',
-    '9:16': '768x1344', '5:4': '1152x896', '4:5': '896x1152',
-    '21:9': '1536x672',
+    '1:1': '1024x1024', '1:4': '512x2048', '1:8': '384x3072',
+    '2:3': '848x1264', '3:2': '1264x848', '3:4': '896x1200',
+    '4:1': '2048x512', '4:3': '1200x896', '4:5': '928x1152',
+    '5:4': '1152x928', '8:1': '3072x384', '9:16': '768x1376',
+    '16:9': '1376x768', '21:9': '1584x672',
   },
   '2K': {
-    '1:1': '2048x2048', '4:3': '2304x1728', '3:4': '1728x2304',
-    '3:2': '2496x1664', '2:3': '1664x2496', '16:9': '2752x1536',
-    '9:16': '1536x2752', '5:4': '2304x1792', '4:5': '1792x2304',
-    '21:9': '3072x1344',
+    '1:1': '2048x2048', '1:4': '1024x4096', '1:8': '768x6144',
+    '2:3': '1696x2528', '3:2': '2528x1696', '3:4': '1792x2400',
+    '4:1': '4096x1024', '4:3': '2400x1792', '4:5': '1856x2304',
+    '5:4': '2304x1856', '8:1': '6144x768', '9:16': '1536x2752',
+    '16:9': '2752x1536', '21:9': '3168x1344',
   },
   '4K': {
-    '1:1': '4096x4096', '4:3': '4608x3456', '3:4': '3456x4608',
-    '3:2': '4992x3328', '2:3': '3328x4992', '16:9': '5376x3024',
-    '9:16': '3024x5376', '5:4': '4608x3584', '4:5': '3584x4608',
-    '21:9': '6144x2688',
+    '1:1': '4096x4096', '1:4': '2048x8192', '1:8': '1536x12288',
+    '2:3': '3392x5056', '3:2': '5056x3392', '3:4': '3584x4800',
+    '4:1': '8192x2048', '4:3': '4800x3584', '4:5': '3712x4608',
+    '5:4': '4608x3712', '8:1': '12288x1536', '9:16': '3072x5504',
+    '16:9': '5504x3072', '21:9': '6336x2688',
   },
 }
 

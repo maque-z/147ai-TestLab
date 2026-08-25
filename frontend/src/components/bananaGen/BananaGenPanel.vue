@@ -3,32 +3,35 @@
     <!-- ===== Config card (collapsible) ===== -->
     <div class="config-card nm-raised">
       <div
-        class="config-head head-clickable"
-        :title="store.paramsCollapsed ? '点击展开参数' : '点击收起参数'"
+        class="config-head"
+        :class="{ 'head-clickable': isBatch }"
+        :title="isBatch ? (store.paramsCollapsed ? '点击展开参数' : '点击收起参数') : ''"
         @click="onHeadClick"
       >
         <div class="collapse-btn">
-          <span class="chev" :class="{ open: !store.paramsCollapsed }">›</span>
+          <span class="chev" :class="{ open: isBatch && !store.paramsCollapsed }">›</span>
           <span class="collapse-label">参数</span>
         </div>
 
-        <!-- Two documented surfaces, one param body and one result grid below. -->
+        <!-- Match the GPT Image workflow: task first, protocol second. -->
         <div class="tabs">
-          <button class="tab" :class="{ on: store.mode === 'native' }" @click="switchMode('native', $event)">
-            原生 generateContent
+          <button class="tab" :class="{ on: isBatch && store.operation === 'generate' }" @click="switchOperation('generate', $event)">
+            生成
           </button>
-          <button class="tab" :class="{ on: store.mode === 'openai' }" @click="switchMode('openai', $event)">
-            OpenAI 兼容
+          <button class="tab" :class="{ on: isBatch && store.operation === 'edit' }" @click="switchOperation('edit', $event)">
+            编辑
           </button>
+          <button class="tab" :class="{ on: store.view === 'test' }" @click="switchView('test', $event)">测试</button>
         </div>
 
         <div class="head-info">
-          <span class="count-badge nm-inset">
+          <span v-if="isBatch" class="count-badge nm-inset">
             {{ shownRequests }} 请求 / {{ shownImages }} 图
           </span>
+          <span v-else class="count-badge nm-inset">{{ BANANA_TEST_CASE_COUNT }} 探测 / 并发 {{ BANANA_TEST_CONCURRENCY }}</span>
         </div>
 
-        <div class="head-actions">
+        <div v-if="isBatch" class="head-actions">
           <button
             v-if="store.generating"
             class="btn btn-sm btn-danger"
@@ -48,17 +51,44 @@
         </div>
       </div>
 
-      <div v-show="!store.paramsCollapsed" ref="bodyEl" class="config-body">
+      <div v-show="isBatch && !store.paramsCollapsed" ref="bodyEl" class="config-body">
+        <div class="surface-row">
+          <span class="surface-label">接口协议</span>
+          <div class="surface-tabs">
+            <button class="surface-tab" :class="{ on: store.mode === 'native' }" @click="switchMode('native', $event)">原生 Gemini</button>
+            <button class="surface-tab" :class="{ on: store.mode === 'openai' }" :disabled="store.operation === 'edit'" @click="switchMode('openai', $event)">OpenAI 兼容</button>
+          </div>
+          <span class="text-muted operation-help">
+            {{ store.operation === 'edit' ? '编辑按文档把参考图作为 inlineData 放入 contents.parts' : '原生接口可检测比例、分辨率与完整生成参数' }}
+          </span>
+        </div>
+        <template v-if="store.mode === 'native' && store.operation === 'edit'">
+          <RefImages v-model="store.referenceImages" />
+          <div class="field">
+            <div class="field-label">
+              蒙版探测
+              <span class="text-muted" style="font-weight:400">约定式 · 文档没有独立 mask 字段</span>
+              <span class="spacer" />
+              <span class="mask-flag" :class="{ on: !!store.mask }">
+                {{ store.mask ? '将作为最后一张 inlineData 发送' : '本次不发送蒙版' }}
+              </span>
+            </div>
+            <MaskEditor :image="store.referenceImages[0] ?? null" @change="store.mask = $event" />
+          </div>
+        </template>
+
         <!-- Prompt -->
         <div class="field">
           <div class="field-label">
             提示词
             <span class="text-muted" style="font-weight:400">{{ store.prompt.length }} 字</span>
+            <span class="spacer" />
+            <button class="btn btn-xs prompt-expand" title="在大编辑框中编辑提示词" @click="promptEditorOpen = true">⤢ 展开编辑</button>
           </div>
           <n-input
             v-model:value="store.prompt"
             type="textarea"
-            placeholder="描述你想生成的图片..."
+            :placeholder="store.operation === 'edit' ? '描述要如何修改这些图片...' : '描述你想生成的图片...'"
             :rows="3"
             class="prompt-input"
           />
@@ -96,68 +126,52 @@
              ratio or safety knobs, so offering them there would be inventing an
              API surface. -->
         <template v-if="store.mode === 'native'">
-          <!-- aspectRatio -->
           <div class="field">
             <div class="field-label">
-              比例 aspectRatio
+              图片尺寸
               <span class="text-muted" style="font-weight:400">
-                {{ store.matrix.aspectRatios.length ? `×${store.matrix.aspectRatios.length}` : '默认 1:1' }}
+                imageConfig · {{ store.matrix.sizePairs.length ? `已选 ${store.matrix.sizePairs.length} 项` : '默认 auto（1:1 · 1K）' }}
               </span>
               <span class="spacer" />
-              <button class="btn btn-xs" @click="store.matrix.aspectRatios = [...COMMON_RATIOS]">通用全选</button>
+              <button class="btn btn-xs" @click="selectAllSizes">全选</button>
               <button
                 class="btn btn-xs"
-                :disabled="!store.matrix.aspectRatios.length"
-                @click="store.matrix.aspectRatios = []"
+                :disabled="!store.matrix.sizePairs.length"
+                @click="store.matrix.sizePairs = []"
               >清空</button>
             </div>
-            <div class="chips">
-              <button
-                v-for="r in ALL_RATIOS" :key="r"
-                class="chip"
-                :class="{ on: store.matrix.aspectRatios.includes(r), warn: ratioUnsupported(r) }"
-                :title="ratioUnsupported(r)
-                  ? '文档称仅 Flash 2（3.1）支持此比例，当前所选模型中有不支持的'
-                  : undefined"
-                @click="toggle(store.matrix.aspectRatios, r)"
-              >{{ r }}</button>
+            <div class="size-table-scroll">
+              <table class="size-table">
+                <thead>
+                  <tr>
+                    <th class="tier-head">尺寸</th>
+                    <th v-for="ratio in ALL_RATIOS" :key="ratio" :class="{ warn: ratioUnsupported(ratio) }">{{ ratio }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="tier in SIZE_TIERS" :key="tier">
+                    <td class="tier-cell">~{{ tier }}</td>
+                    <td
+                      v-for="ratio in ALL_RATIOS"
+                      :key="`${tier}-${ratio}`"
+                      class="size-cell"
+                      :class="{ on: store.matrix.sizePairs.includes(sizeKey(tier, ratio)), unavailable: !sizeCellAvailable(tier, ratio) }"
+                      :title="sizeCellTitle(tier, ratio)"
+                      @click="sizeCellAvailable(tier, ratio) && toggle(store.matrix.sizePairs, sizeKey(tier, ratio))"
+                    >{{ sizePixels(tier, ratio) }}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
-          </div>
-
-          <!-- imageSize -->
-          <div class="field">
-            <div class="field-label">
-              分辨率 imageSize
-              <span class="text-muted" style="font-weight:400">
-                {{ store.matrix.imageSizes.length ? `×${store.matrix.imageSizes.length}` : '默认 1K' }}
-              </span>
-              <span class="spacer" />
-              <button
-                class="btn btn-xs"
-                :disabled="!store.matrix.imageSizes.length"
-                @click="store.matrix.imageSizes = []"
-              >清空</button>
-            </div>
-            <div class="chips">
-              <button
-                v-for="s in IMAGE_SIZES" :key="s.value"
-                class="chip"
-                :class="{ on: store.matrix.imageSizes.includes(s.value), warn: sizeUnsupported(s.value) }"
-                :title="sizeTitle(s)"
-                @click="toggle(store.matrix.imageSizes, s.value)"
-              >
-                {{ s.value }}
-                <span v-if="'probe' in s" class="chip-flag">probe</span>
-              </button>
-            </div>
+            <p class="size-note text-muted">按钮文字是文档公布的实际像素；“—”表示文档未公布该组合，红色列表示部分所选模型不支持。</p>
           </div>
 
           <!-- responseModalities -->
           <div class="field">
             <div class="field-label">
-              responseModalities
+              返回内容
               <span class="text-muted" style="font-weight:400">
-                文档要求必须包含 IMAGE，否则只返回文本
+                responseModalities · 必须含 IMAGE 才会返回图片
               </span>
             </div>
             <div class="chips">
@@ -170,29 +184,31 @@
             </div>
           </div>
 
-          <!-- safetySettings: one threshold across all five documented categories,
-               which is how the official example sets them. -->
+          <!-- Official safetySettings is category-specific. -->
           <div class="field">
             <div class="field-label">
-              safetySettings
+              安全过滤
               <span class="text-muted" style="font-weight:400">
-                不选则整块不发送 · 一档同时应用于 5 个类别
+                safetySettings · 每个类别可单独设置；留空使用上游默认策略
               </span>
             </div>
-            <div class="chips">
-              <button
-                v-for="t in SAFETY_THRESHOLDS" :key="t"
-                class="chip" :class="{ on: store.matrix.safetyThreshold === t }"
-                @click="store.matrix.safetyThreshold = store.matrix.safetyThreshold === t ? null : t"
-              >{{ t }}</button>
+            <div class="safety-grid">
+              <div v-for="category in SAFETY_CATEGORIES" :key="category.value" class="safety-row">
+                <span class="safety-category">{{ category.label }}</span>
+                <select v-model="store.matrix.safetySettings[category.value]" class="native-select">
+                  <option :value="null">跟随默认</option>
+                  <option v-for="threshold in SAFETY_THRESHOLDS" :key="threshold" :value="threshold">{{ threshold }}</option>
+                </select>
+              </div>
             </div>
+            <p class="size-note text-muted">官方允许不同类别使用不同阈值；实际可用性以模型和网关响应为准。</p>
           </div>
         </template>
 
         <!-- Numeric params -->
         <div class="num-grid">
           <div class="field">
-            <div class="field-label">temperature <span class="text-muted" style="font-weight:400">默认 1.0</span></div>
+            <div class="field-label">随机程度 <span class="text-muted" style="font-weight:400">temperature · 默认 1.0</span></div>
             <n-input-number
               v-model:value="store.matrix.temperature"
               :min="0" :max="2" :step="0.1" size="small" style="width:100%"
@@ -200,17 +216,64 @@
             />
           </div>
           <div v-if="store.mode === 'native'" class="field">
-            <div class="field-label">candidateCount <span class="text-muted" style="font-weight:400">默认 1</span></div>
+            <div class="field-label">候选图片数 <span class="text-muted" style="font-weight:400">candidateCount · 默认 1</span></div>
             <n-input-number
               v-model:value="store.matrix.candidateCount"
               :min="1" :max="8" size="small" style="width:100%"
               placeholder="默认 1" clearable
             />
           </div>
+          <div v-if="store.mode === 'native'" class="field">
+            <div class="field-label">最大输出 Token <span class="text-muted" style="font-weight:400">maxOutputTokens · 不填使用模型默认值</span></div>
+            <n-input-number
+              v-model:value="store.matrix.maxOutputTokens"
+              :min="1" :max="1000000" size="small" style="width:100%"
+              placeholder="使用模型默认值" clearable
+            />
+          </div>
           <div class="field">
-            <div class="field-label">最大并发数</div>
+            <div class="field-label">最大并发数 <span class="text-muted" style="font-weight:400">每个参数组合独立请求</span></div>
             <n-input-number v-model:value="store.matrix.concurrency" :min="1" :max="50" size="small" style="width:100%" />
           </div>
+        </div>
+
+        <div v-if="store.mode === 'native'" class="num-grid">
+          <div class="field">
+            <div class="field-label">核采样 <span class="text-muted" style="font-weight:400">topP · 0 到 1 · 文档可选</span></div>
+            <n-input-number v-model:value="store.matrix.topP" :min="0" :max="1" :step="0.05" size="small" style="width:100%" clearable placeholder="不发送" />
+          </div>
+          <div class="field">
+            <div class="field-label">候选池 <span class="text-muted" style="font-weight:400">topK · 部分模型支持</span></div>
+            <n-input-number v-model:value="store.matrix.topK" :min="1" :max="1000" size="small" style="width:100%" clearable placeholder="不发送" />
+          </div>
+          <div class="field">
+            <div class="field-label">随机种子 <span class="text-muted" style="font-weight:400">seed · 图片模型不保证生效</span></div>
+            <n-input-number v-model:value="store.matrix.seed" :min="0" :max="2147483647" size="small" clearable style="width:100%" placeholder="不发送" />
+          </div>
+        </div>
+
+        <div v-if="store.mode === 'native'" class="field">
+          <div class="field-label">思考等级 <span class="text-muted" style="font-weight:400">thinkingConfig.thinkingLevel · Gemini 3 推荐</span></div>
+          <p v-if="!thinkingSupported" class="size-note text-muted">当前选择的模型未启用 Gemini 3 思考模式；为避免上游拒绝请求，思考参数不会发送。</p>
+          <div class="chips">
+            <button v-for="level in THINKING_LEVELS" :key="level.value" class="chip" :disabled="!thinkingSupported" :class="{ on: store.matrix.thinkingLevel === level.value }" :title="level.note" @click="store.matrix.thinkingLevel = store.matrix.thinkingLevel === level.value ? null : level.value">{{ level.label }}</button>
+          </div>
+          <div class="thinking-options">
+            <label class="check-option"><input v-model="store.matrix.includeThoughts" :disabled="!thinkingSupported || !store.matrix.thinkingLevel" type="checkbox" /> 返回思考过程 <span class="text-muted">includeThoughts（需先启用思考）</span></label>
+            <n-input-number v-model:value="store.matrix.thinkingBudget" :disabled="!thinkingSupported" :min="-1" :max="1000000" size="small" clearable placeholder="thinkingBudget（可选）" style="width:220px" />
+          </div>
+        </div>
+
+        <div v-if="store.mode === 'native'" class="field">
+          <div class="field-label">
+            停止序列
+            <span class="text-muted" style="font-weight:400">stopSequences · 多个值用英文逗号分隔，不填则不发送</span>
+          </div>
+          <n-input
+            v-model:value="stopSequencesText"
+            size="small"
+            placeholder="例如 END, STOP"
+          />
         </div>
 
         <!-- The OpenAI-compatible doc contradicts itself; saying so here is more
@@ -223,8 +286,10 @@
       </div>
     </div>
 
+    <BananaTestPanel v-if="store.view === 'test'" />
+
     <!-- ===== Results ===== -->
-    <div v-if="visibleJobs.length" ref="gridEl" class="results-grid">
+    <div v-if="isBatch && visibleJobs.length" ref="gridEl" class="results-grid">
       <BananaCard
         v-for="job in visibleJobs"
         :key="job.id"
@@ -234,10 +299,23 @@
       />
     </div>
 
-    <div v-else class="empty-state text-muted">
+    <div v-else-if="isBatch" class="empty-state text-muted">
       <div class="empty-icon">🍌</div>
       <p>选择模型与参数，点右上角「生成」开始并发测试</p>
     </div>
+
+    <n-modal
+      v-model:show="promptEditorOpen"
+      preset="card"
+      :title="store.operation === 'edit' ? 'Gemini 编辑提示词' : 'Gemini 生成提示词'"
+      style="width: min(760px, 94vw)"
+      :header-extra="() => `${store.prompt.length} 字`"
+      :bordered="false"
+      :segmented="{ content: true }"
+    >
+      <n-input v-model:value="store.prompt" type="textarea" :rows="18" class="prompt-editor" />
+      <template #footer><button class="btn btn-primary" @click="promptEditorOpen = false">完成</button></template>
+    </n-modal>
 
     <ImagePreview v-model:show="previewVisible" :items="previewItems" :start="previewStart" />
   </div>
@@ -245,25 +323,44 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
-import { NInput, NInputNumber } from 'naive-ui'
+import { NInput, NInputNumber, NModal } from 'naive-ui'
 import { useBananaGenStore } from '@/stores/bananaGen'
 import { enterCards, fadeInUp, pulse, countTo } from '@/utils/motion'
 import {
-  ALL_RATIOS, COMMON_RATIOS, IMAGE_SIZES, MODALITY_SETS, SAFETY_THRESHOLDS,
-  ratioSupported, sizeSupported, effectiveSize,
+  ALL_RATIOS, DOC_PIXELS, MODALITY_SETS, SAFETY_CATEGORIES, SAFETY_THRESHOLDS, THINKING_LEVELS,
+  ratioSupported, sizeSupported, supportsThinking,
 } from '@/utils/bananaSpec'
 import BananaCard from './BananaCard.vue'
+import RefImages from '@/components/imageGen/RefImages.vue'
+import MaskEditor from '@/components/imageGen/MaskEditor.vue'
+import BananaTestPanel from './BananaTestPanel.vue'
 import ImagePreview, { type PreviewItem } from '@/components/imageGen/ImagePreview.vue'
+import { BANANA_TEST_CASE_COUNT, BANANA_TEST_CONCURRENCY } from '@/stores/bananaTest'
 import type { BananaJob, BananaMode } from '@/types'
 
 /** Prompt, matrix and mode all live in the store: the run button sits in the top
  *  bar, in a different component tree, and needs the same state. */
 const store = useBananaGenStore()
+const promptEditorOpen = ref(false)
+const SIZE_TIERS = ['512', '1K', '2K', '4K'] as const
+const isBatch = computed(() => store.view === 'batch')
+
+const stopSequencesText = computed({
+  get: () => store.matrix.stopSequences.join(', '),
+  set: (value: string) => {
+    const unique = new Set<string>()
+    store.matrix.stopSequences = value.split(',')
+      .map(item => item.trim())
+      .filter(item => item && !unique.has(item) && !!unique.add(item))
+      .slice(0, 5)
+  },
+})
 
 /** Jobs for whichever surface is active. The two pools are separate so switching
  *  tabs never loses the other side's results. */
 const visibleJobs = computed(() =>
-  store.mode === 'openai' ? store.openaiJobs : store.nativeJobs
+  (store.mode === 'openai' ? store.openaiJobs : store.nativeJobs)
+    .filter(job => job.operation === store.operation)
 )
 
 const previewVisible = ref(false)
@@ -275,8 +372,10 @@ const bodyEl = ref<HTMLElement | null>(null)
  *  rather than replaced instantly. The model list differs between the two, so the
  *  selection is reset to that surface's default. */
 function switchMode(next: BananaMode, e: MouseEvent) {
-  if (store.mode === next) return
+  if (store.mode === next && isBatch.value) return
+  if (store.operation === 'edit' && next === 'openai') return
   store.mode = next
+  store.view = 'batch'
   store.matrix.models = [store.availableModels[0].id]
   pulse(e.currentTarget as HTMLElement)
   nextTick(() => {
@@ -284,10 +383,31 @@ function switchMode(next: BananaMode, e: MouseEvent) {
   })
 }
 
+function switchOperation(next: 'generate' | 'edit', e: MouseEvent) {
+  if (store.operation === next && isBatch.value) return
+  store.operation = next
+  store.view = 'batch'
+  if (next === 'edit' && store.mode !== 'native') {
+    store.mode = 'native'
+    store.matrix.models = [store.availableModels[0].id]
+  }
+  pulse(e.currentTarget as HTMLElement)
+  nextTick(() => {
+    if (bodyEl.value) fadeInUp(bodyEl.value, { distance: 6 })
+  })
+}
+
+function switchView(next: 'batch' | 'test', e: MouseEvent) {
+  if (store.view === next) return
+  store.view = next
+  pulse(e.currentTarget as HTMLElement)
+}
+
 /** Collapse/expand from anywhere on the header strip. The tabs and the
  *  stop/clear buttons live in the same strip, so anything interactive is
  *  excluded — switching surface must not also collapse the body. */
 function onHeadClick(e: MouseEvent) {
+  if (!isBatch.value) return
   const el = e.target as HTMLElement
   if (el.closest('button, a, input, .tabs')) return
   store.paramsCollapsed = !store.paramsCollapsed
@@ -312,6 +432,16 @@ function toggleModel(id: string) {
   }
 }
 
+const thinkingSupported = computed(() => store.matrix.models.some(model => supportsThinking(model)))
+
+watch(thinkingSupported, supported => {
+  if (!supported) {
+    store.matrix.thinkingLevel = null
+    store.matrix.includeThoughts = false
+    store.matrix.thinkingBudget = null
+  }
+})
+
 /** Whether any currently selected model lacks documented support. Flagged rather
  *  than disabled: sending an unsupported combination on purpose is how the
  *  documented fallback gets verified. */
@@ -319,15 +449,34 @@ function ratioUnsupported(ratio: string) {
   return store.matrix.models.some(m => !ratioSupported(m, ratio))
 }
 
-function sizeUnsupported(size: string) {
-  return store.matrix.models.some(m => !sizeSupported(m, size))
+function sizeKey(tier: string, ratio: string) {
+  return `${tier}|${ratio}`
 }
 
-function sizeTitle(s: typeof IMAGE_SIZES[number]) {
-  if ('probe' in s) return s.probe
-  const bad = store.matrix.models.filter(m => !sizeSupported(m, s.value))
-  if (!bad.length) return '所选模型均支持'
-  return `文档称以下模型不支持，会回退到 ${effectiveSize(bad[0], s.value)}：\n` + bad.join('\n')
+function sizePixels(tier: string, ratio: string) {
+  return DOC_PIXELS[tier]?.[ratio]?.replace('x', '×') ?? '—'
+}
+
+function sizeCellAvailable(tier: string, ratio: string) {
+  return !!DOC_PIXELS[tier]?.[ratio]
+}
+
+function sizeCellTitle(tier: string, ratio: string) {
+  if (!sizeCellAvailable(tier, ratio)) return '文档未公布该清晰度与比例的像素尺寸'
+  const bad = store.matrix.models.filter(model =>
+    !sizeSupported(model, tier) || !ratioSupported(model, ratio),
+  )
+  return bad.length
+    ? `文档称以下所选模型不支持此组合，可能回退：\n${bad.join('\n')}`
+    : `${ratio} · ${tier} · ${sizePixels(tier, ratio)}`
+}
+
+function selectAllSizes() {
+  store.matrix.sizePairs = SIZE_TIERS.flatMap(tier =>
+    ALL_RATIOS
+      .filter(ratio => sizeCellAvailable(tier, ratio))
+      .map(ratio => sizeKey(tier, ratio)),
+  )
 }
 
 /** Counters tween to their new value, so a matrix change reads as the batch
@@ -479,6 +628,71 @@ function openPreview(job: BananaJob) {
   border-top: 1px solid var(--shadow-dark);
 }
 
+.surface-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.surface-label { font-size: 12px; font-weight: 600; }
+.surface-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 8px;
+  box-shadow: inset 2px 2px 4px var(--shadow-dark), inset -2px -2px 4px var(--shadow-light);
+}
+.surface-tab {
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 11px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.surface-tab:hover { color: var(--accent-strong); }
+.surface-tab.on { color: #fff; background: var(--accent-strong); }
+.surface-tab:disabled { cursor: not-allowed; opacity: 0.45; }
+.operation-help { margin-left: 4px; font-size: 10.5px; }
+
+.safety-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 8px;
+}
+.safety-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: var(--bg);
+  box-shadow: inset 1px 1px 3px var(--shadow-dark), inset -1px -1px 3px var(--shadow-light);
+}
+.safety-category {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-primary);
+}
+.native-select {
+  min-width: 0;
+  max-width: 100%;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-primary);
+  background: var(--bg);
+  box-shadow: inset 1px 1px 3px var(--shadow-dark), inset -1px -1px 3px var(--shadow-light);
+  font-size: 10px;
+}
+.thinking-options { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.check-option { font-size:11px; color:var(--text-primary); display:flex; align-items:center; gap:6px; }
+.check-option input { accent-color:var(--accent-strong); }
+
 .field { display: flex; flex-direction: column; gap: 7px; }
 .field-label {
   display: flex; align-items: center; gap: 8px;
@@ -493,6 +707,36 @@ function openPreview(job: BananaJob) {
   font-size: 12.5px;
   line-height: 1.6;
 }
+.prompt-editor :deep(.n-input__textarea-el) { font-size: 14px; line-height: 1.7; }
+.prompt-expand { flex-shrink: 0; }
+.mask-flag { font-size: 10.5px; font-weight: 600; color: var(--text-muted); }
+.mask-flag.on { color: var(--accent-strong); }
+
+/* Screenshot-style Gemini size matrix: ratios run across, documented tiers run
+   down, and every clickable cell maps to exactly one upstream request. */
+.size-table-scroll { overflow-x: auto; padding-bottom: 5px; -webkit-overflow-scrolling: touch; }
+.size-table { min-width: 100%; border-collapse: separate; border-spacing: 5px; font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.size-table th { padding: 4px 8px; white-space: nowrap; font-weight: 600; }
+.size-table th.warn { color: var(--danger); }
+.tier-head, .tier-cell { position: sticky; left: 0; z-index: 1; background: var(--bg); text-align: left; white-space: nowrap; }
+.tier-cell { padding: 5px 7px; color: var(--text-muted); font-weight: 600; }
+.size-cell {
+  min-width: 88px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+  color: var(--text-primary);
+  background: var(--bg);
+  box-shadow: 2px 2px 5px var(--shadow-dark), -2px -2px 5px var(--shadow-light);
+  transition: color .15s, background .15s, transform .15s;
+}
+.size-cell:hover { color: var(--accent-strong); transform: translateY(-1px); }
+.size-cell.on { color: #fff; background: var(--accent-strong); box-shadow: inset 2px 2px 4px rgba(0,0,0,.18); }
+.size-cell.unavailable { cursor: not-allowed; opacity: .35; box-shadow: inset 1px 1px 3px var(--shadow-dark); }
+.size-cell.unavailable:hover { color: var(--text-primary); transform: none; }
+.size-note { margin: 0; font-size: 10px; line-height: 1.5; }
 
 /* ===== Chips ===== */
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -515,6 +759,7 @@ function openPreview(job: BananaJob) {
   background: var(--accent-strong);
   box-shadow: inset 2px 2px 4px rgba(0, 0, 0, 0.18);
 }
+.chip:disabled { cursor: not-allowed; opacity: .45; box-shadow: inset 1px 1px 3px var(--shadow-dark); }
 
 /* Documented as unsupported by at least one selected model. Marked, not
    disabled — sending it on purpose is how the fallback gets verified. */

@@ -10,6 +10,7 @@ export interface BananaConfig {
   baseurl: string
   api_key: string
   model_id: string
+  custom_models: string[]
   timeout: number
   updated_at?: string
 }
@@ -17,6 +18,25 @@ export interface BananaConfig {
 /** Which surface a batch targets. Two separate endpoints, two separate job
  *  pools, one shared results grid — same arrangement as generate/edit. */
 export type BananaMode = 'native' | 'openai'
+export type BananaOperation = 'generate' | 'edit'
+
+export type BananaSafetyThreshold =
+  | 'HARM_BLOCK_THRESHOLD_UNSPECIFIED'
+  | 'BLOCK_LOW_AND_ABOVE'
+  | 'BLOCK_MEDIUM_AND_ABOVE'
+  | 'BLOCK_ONLY_HIGH'
+  | 'BLOCK_NONE'
+  | 'OFF'
+
+export interface BananaSafetySetting {
+  category: string
+  threshold: BananaSafetyThreshold
+}
+
+export interface BananaReferenceImage {
+  mime_type: string
+  data: string
+}
 
 /** Every param optional: omitted means "let the API apply its own default",
  *  which is a distinct case from any value the user could pick. */
@@ -30,7 +50,16 @@ export interface BananaGenerateRequest {
   candidate_count?: number
   max_output_tokens?: number
   stop_sequences?: string[]
-  safety_threshold?: string
+  top_p?: number
+  top_k?: number
+  seed?: number
+  safety_settings?: BananaSafetySetting[]
+  thinking_level?: string
+  include_thoughts?: boolean
+  thinking_budget?: number
+  reference_images?: BananaReferenceImage[]
+  /** Internal probe input; backend sends it as a final inlineData part. */
+  mask_image?: BananaReferenceImage
 }
 
 export interface BananaChatRequest {
@@ -53,6 +82,8 @@ export interface BananaImage {
   width?: number
   height?: number
   candidate_index?: number
+  /** Whether the returned PNG container declares an alpha channel. */
+  has_alpha_channel?: boolean
 }
 
 export interface BananaGenerateResponse {
@@ -84,13 +115,21 @@ export interface BananaGenerateResponse {
  *  (default) row to the cross product rather than zero. */
 export interface BananaMatrix {
   models: string[]
-  aspectRatios: string[]
-  imageSizes: string[]
+  /** Exact `imageSize|aspectRatio` cells selected in the documented size table. */
+  sizePairs: string[]
   /** Each entry is one responseModalities array, joined by "," for identity. */
   modalities: string[]
   temperature: number | null
   candidateCount: number | null
-  safetyThreshold: string | null
+  safetySettings: Record<string, BananaSafetyThreshold | null>
+  maxOutputTokens: number | null
+  stopSequences: string[]
+  topP: number | null
+  topK: number | null
+  seed: number | null
+  thinkingLevel: string | null
+  includeThoughts: boolean
+  thinkingBudget: number | null
   concurrency: number
 }
 
@@ -103,6 +142,10 @@ export interface BananaJobImage {
   /** Server-side header read; the browser fills these in if it could not parse. */
   width?: number
   height?: number
+  /** Whether decoded pixels contain any transparent samples. */
+  hasAlpha?: boolean
+  /** Server-side container-level alpha declaration. */
+  hasAlphaChannel?: boolean
 }
 
 /** One card in the results grid.
@@ -115,6 +158,7 @@ export interface BananaJob {
   id: number
   status: 'pending' | 'running' | 'done' | 'error' | 'cancelled'
   mode: BananaMode
+  operation: BananaOperation
 
   // ---- requested; undefined == left to the API ----
   model: string
@@ -123,7 +167,17 @@ export interface BananaJob {
   modalities?: string
   temperature?: number
   candidateCount?: number
-  safetyThreshold?: string
+  safetySettings?: Record<string, BananaSafetyThreshold | null>
+  maxOutputTokens?: number
+  stopSequences?: string[]
+  topP?: number
+  topK?: number
+  seed?: number
+  thinkingLevel?: string
+  includeThoughts?: boolean
+  thinkingBudget?: number
+  refCount?: number
+  hasMask?: boolean
 
   // ---- actual (measured or reported) ----
   images: BananaJobImage[]
@@ -141,4 +195,46 @@ export interface BananaJob {
   totalTokens?: number
   requestId?: string
   error?: string
+}
+
+export type BananaTestDimension =
+  | 'size' | 'model' | 'modalities' | 'candidate' | 'edit' | 'mask' | 'probe'
+  | 'sampling' | 'tokens' | 'thinking' | 'safety'
+
+export interface BananaTestCase {
+  id: string
+  label: string
+  dimension: BananaTestDimension
+  req: Omit<BananaGenerateRequest, 'prompt' | 'reference_images' | 'mask_image'>
+  isEdit?: boolean
+  usesMask?: boolean
+  expectedPixels?: string
+  expectedImages?: number
+  expectNoImage?: boolean
+  informational?: boolean
+}
+
+export type BananaTestVerdict = 'pass' | 'fail' | 'info' | 'ratelimit'
+
+export interface BananaTestResult {
+  case: BananaTestCase
+  status: 'pending' | 'running' | 'done' | 'error' | 'cancelled'
+  verdict?: BananaTestVerdict
+  detail?: string
+  src?: string
+  width?: number
+  height?: number
+  imageCount?: number
+  candidateCount?: number
+  actualModel?: string
+  requestId?: string
+  elapsedMs?: number
+  error?: string
+}
+
+export interface BananaTestLogEntry {
+  id: number
+  ts: string
+  level: 'info' | 'ok' | 'warn' | 'error' | 'rule'
+  text: string
 }

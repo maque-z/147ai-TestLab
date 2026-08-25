@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String
+from sqlalchemy import JSON, Boolean, Column, DateTime, Integer, String
 
 from ..core.database import Base
 
@@ -78,6 +78,11 @@ class UserBananaConfig(Base):
     # Highest-quality model in the official list, and the only one that documents
     # 2K/4K support — the most useful default for a lab that exists to check
     # whether the documented sizes actually come back.
-    model_id = Column(String(100), default="gemini-3-pro-image-preview")
+    model_id = Column(String(100), default="gemini-3.1-flash-image")
+    # User-provided model ids are kept separately from the default so the
+    # documented model list remains visible while custom gateway aliases can be
+    # selected in the batch matrix. JSON is supported by SQLite and keeps the
+    # config API as a real list instead of a delimiter-encoded string.
+    custom_models = Column(JSON, default=list, nullable=False)
     timeout = Column(Integer, default=480)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

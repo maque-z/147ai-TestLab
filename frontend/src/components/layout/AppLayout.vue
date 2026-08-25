@@ -62,6 +62,7 @@
                so the two actions cannot be confused for one another. While a
                batch runs this shows its progress instead. -->
           <button
+            v-if="bananaGen.view === 'batch'"
             class="btn btn-lg btn-primary"
             :disabled="!bananaGen.canRun"
             :title="bananaGen.blockReason || '点击开始生成，可与进行中的批次并发'"
@@ -125,6 +126,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useImageGenStore } from '@/stores/imageGen'
 import { useApiTestStore } from '@/stores/apiTest'
 import { useBananaGenStore } from '@/stores/bananaGen'
+import { useBananaTestStore } from '@/stores/bananaTest'
 import SideNav from './SideNav.vue'
 
 const router = useRouter()
@@ -133,6 +135,7 @@ const auth = useAuthStore()
 const imageGen = useImageGenStore()
 const apiTest = useApiTestStore()
 const bananaGen = useBananaGenStore()
+const bananaTest = useBananaTestStore()
 // On mobile the sidebar starts hidden; on desktop it starts expanded.
 const collapsed = ref(typeof window !== 'undefined' && window.innerWidth <= 640)
 
@@ -196,6 +199,7 @@ function handleLogout() {
   imageGen.stop()
   apiTest.stop()
   bananaGen.stop()
+  bananaTest.stop()
   auth.logout()
   router.push('/login')
 }

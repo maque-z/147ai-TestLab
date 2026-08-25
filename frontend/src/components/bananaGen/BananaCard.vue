@@ -36,7 +36,12 @@
     <div class="meta">
       <!-- Model gets its own line: it is the widest value and the one that
            identifies the card. -->
-      <div class="model-line" :title="job.model">{{ job.model }}</div>
+      <div class="model-line" :title="job.model">
+        <span class="operation-badge">
+          {{ job.operation === 'edit' ? `编辑 · ${job.refCount ?? 0} 图${job.hasMask ? ' · 蒙版探测' : ''}` : '生成' }}
+        </span>
+        {{ job.model }}
+      </div>
 
       <div class="meta-head">
         <span>项</span>
@@ -215,13 +220,20 @@ const compareRows = computed<CompareRow[]>(() => {
     badWhy: 'inlineData.mimeType 与实际魔术字节不符',
   })
 
-  // ---- candidateCount: how many images actually came back ----
+  // candidateCount controls candidates, not necessarily image parts. Keep both
+  // measurements: a gateway can return one candidate carrying multiple images.
   const wantN = j.candidateCount ?? 1
   rows.push({
-    label: '张数',
+    label: '候选数',
     want: j.candidateCount != null ? String(wantN) : '默认 1',
-    got: done ? String(j.images.length) : DASH,
-    bad: done && j.images.length !== wantN,
+    got: done ? String(j.actualCandidates ?? 0) : DASH,
+    bad: done && j.actualCandidates != null && j.actualCandidates !== wantN,
+  })
+  rows.push({
+    label: '返回图片',
+    want: '至少 1 张',
+    got: done ? `${j.images.length} 张` : DASH,
+    bad: done && j.images.length === 0,
   })
 
   // ---- finishReason ----
@@ -229,7 +241,7 @@ const compareRows = computed<CompareRow[]>(() => {
     const reasons = j.finishReasons.join(', ')
     const clean = j.finishReasons.every(r => r === 'STOP')
     rows.push({
-      label: 'finishReason',
+      label: '完成原因',
       want: 'STOP',
       got: reasons,
       bad: !clean,
@@ -251,13 +263,40 @@ const compareRows = computed<CompareRow[]>(() => {
 
   // The API echoes none of these back, so only the requested value is knowable.
   if (j.modalities) {
-    rows.push({ label: 'modalities', want: j.modalities, got: DASH })
+    rows.push({ label: '返回内容', want: j.modalities, got: DASH })
   }
   if (j.temperature != null) {
-    rows.push({ label: 'temperature', want: String(j.temperature), got: DASH })
+    rows.push({ label: '随机程度', want: String(j.temperature), got: DASH })
   }
-  if (j.safetyThreshold) {
-    rows.push({ label: 'safety', want: j.safetyThreshold, got: DASH })
+  if (j.safetySettings && Object.keys(j.safetySettings).length) {
+    const configured = Object.entries(j.safetySettings).filter(([, threshold]) => threshold)
+    if (configured.length) {
+      rows.push({ label: '安全过滤', want: configured.map(([category, threshold]) => `${category}: ${threshold}`).join(' · '), got: DASH })
+    }
+  }
+  if (j.maxOutputTokens != null) {
+    rows.push({ label: '最大输出 Token', want: String(j.maxOutputTokens), got: DASH })
+  }
+  if (j.stopSequences?.length) {
+    rows.push({ label: '停止序列', want: j.stopSequences.join(', '), got: DASH })
+  }
+  if (j.topP != null) {
+    rows.push({ label: '核采样', want: String(j.topP), got: DASH })
+  }
+  if (j.topK != null) {
+    rows.push({ label: '候选池', want: String(j.topK), got: DASH })
+  }
+  if (j.seed != null) {
+    rows.push({ label: '随机种子', want: String(j.seed), got: DASH })
+  }
+  if (img?.actualFormat === 'png' || img?.hasAlphaChannel != null || img?.hasAlpha != null) {
+    rows.push({
+      label: '透明通道',
+      want: img?.hasAlphaChannel === undefined ? '容器未声明' : img.hasAlphaChannel ? '容器支持' : '容器不支持',
+      got: img?.hasAlpha === undefined ? DASH : img.hasAlpha ? '检测到透明像素' : '未检测到透明像素',
+      bad: img?.hasAlphaChannel === false && img?.hasAlpha === true,
+      badWhy: '文件容器未声明 alpha 通道，但浏览器解码出了透明像素',
+    })
   }
 
   // Only worth a row when the API reports having used a different model — a
@@ -402,6 +441,17 @@ function fmtFullTime(ts: number) {
   color: var(--text-primary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding-bottom: 4px;
+}
+.operation-badge {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--accent-strong);
+  color: #fff;
+  font-family: inherit;
+  font-size: 9px;
+  font-weight: 600;
 }
 
 .meta-row { display: flex; justify-content: space-between; gap: 8px; }
