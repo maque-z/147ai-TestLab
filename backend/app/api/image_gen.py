@@ -8,6 +8,10 @@ from sqlalchemy.orm import Session
 
 from ..core.database import get_db
 from ..core.deps import UpstreamConfig, get_current_user, get_image_config
+# The two generation endpoints answer as a heartbeat stream rather than a plain
+# JSON body — an idle 60-120s connection gets reaped by proxies on the path.
+# See core/streaming.py for what that costs and why it is framed this way.
+from ..core.streaming import heartbeat_response
 # Byte-level inspection lives in core/ because the Gemini endpoint needs the same
 # checks: both upstreams declare a format that can disagree with the bytes sent.
 from ..core.imaging import (
@@ -185,7 +189,7 @@ def save_config(
     return user_crud.update_image_config(db, current_user.id, body)
 
 
-@router.post("/generate", response_model=GenerateResponse)
+@router.post("/generate")
 async def generate(
     body: GenerateRequest,
     cfg: UpstreamConfig = Depends(get_image_config),
@@ -196,40 +200,48 @@ async def generate(
     No `db` dependency on purpose: the config arrives as a snapshot with its
     session already closed, so no pooled connection is held across the 60-120s
     upstream call. See core/deps.py.
+
+    Answers as a heartbeat stream, so `response_model` is gone from the
+    decorator — the shape is still GenerateResponse, wrapped in the envelope
+    described in core/streaming.py. Auth and config errors still arrive as real
+    status codes: their dependencies run before the first byte is sent.
     """
-    payload: dict = {
-        "model": cfg.model_id,
-        "prompt": body.prompt,
-        # n omitted when unset, like every other optional param: substituting 1
-        # would report the API's default as though it had been requested, and
-        # whether the API defaults to 1 is one of the things worth observing.
-        **({"n": body.n} if body.n is not None else {}),
-        **optional_params(
-            size=body.size,
-            quality=body.quality,
-            output_format=body.output_format,
-            output_compression=body.output_compression,
-            moderation=body.moderation,
-            background=body.background,
-        ),
-    }
+    async def work() -> GenerateResponse:
+        payload: dict = {
+            "model": cfg.model_id,
+            "prompt": body.prompt,
+            # n omitted when unset, like every other optional param: substituting 1
+            # would report the API's default as though it had been requested, and
+            # whether the API defaults to 1 is one of the things worth observing.
+            **({"n": body.n} if body.n is not None else {}),
+            **optional_params(
+                size=body.size,
+                quality=body.quality,
+                output_format=body.output_format,
+                output_compression=body.output_compression,
+                moderation=body.moderation,
+                background=body.background,
+            ),
+        }
 
-    logger.info(
-        "POST /v1/images/generations  size=%s quality=%s background=%s",
-        payload.get("size", "<default>"),
-        payload.get("quality", "<default>"),
-        payload.get("background", "<default>"),
-    )
+        logger.info(
+            "POST /v1/images/generations  size=%s quality=%s background=%s",
+            payload.get("size", "<default>"),
+            payload.get("quality", "<default>"),
+            payload.get("background", "<default>"),
+        )
 
-    data, elapsed_ms, request_id = await call_upstream(
-        cfg, "/v1/images/generations", json=payload
-    )
+        data, elapsed_ms, request_id = await call_upstream(
+            cfg, "/v1/images/generations", json=payload
+        )
 
-    return build_response(data, cfg=cfg, prompt=body.prompt, payload=payload,
-                          elapsed_ms=elapsed_ms, request_id=request_id)
+        return build_response(data, cfg=cfg, prompt=body.prompt, payload=payload,
+                              elapsed_ms=elapsed_ms, request_id=request_id)
+
+    return heartbeat_response(work())
 
 
-@router.post("/edit", response_model=GenerateResponse)
+@router.post("/edit")
 async def edit(
     # Same bounds as GenerateRequest, imported rather than restated — this
     # endpoint takes the identical params as multipart Form fields, and two
@@ -260,6 +272,12 @@ async def edit(
     the region the model is asked to repaint.
 
     No `db` dependency, same as /generate — see core/deps.py.
+
+    Answers as a heartbeat stream (see core/streaming.py). Note what stays
+    *outside* the stream: every upload check below runs first and still raises a
+    real 400. Those answer in milliseconds, so there is nothing to keep alive,
+    and "第 3 张参考图格式不对" is worth a status code rather than an envelope.
+    Only the upstream call itself — the part that takes minutes — is wrapped.
     """
     if not images:
         raise HTTPException(status_code=400, detail="请至少上传 1 张参考图")
@@ -341,9 +359,15 @@ async def edit(
         payload.get("background", "<default>"),
     )
 
-    data, elapsed_ms, request_id = await call_upstream(
-        cfg, "/v1/images/edits", data=form, files=files
-    )
+    # From here on the wall clock is the upstream's, so the rest is streamed.
+    # `files` is already fully read into memory above, which is what makes this
+    # safe: the UploadFile handles are not touched again after the response
+    # starts, so Starlette is free to clean them up whenever it likes.
+    async def work() -> GenerateResponse:
+        data, elapsed_ms, request_id = await call_upstream(
+            cfg, "/v1/images/edits", data=form, files=files
+        )
+        return build_response(data, cfg=cfg, prompt=prompt, payload=payload,
+                              elapsed_ms=elapsed_ms, request_id=request_id)
 
-    return build_response(data, cfg=cfg, prompt=prompt, payload=payload,
-                          elapsed_ms=elapsed_ms, request_id=request_id)
+    return heartbeat_response(work())

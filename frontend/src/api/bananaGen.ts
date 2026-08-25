@@ -1,7 +1,7 @@
 import type {
   BananaConfig, BananaGenerateRequest, BananaChatRequest, BananaGenerateResponse,
 } from '@/types'
-import { http } from './http'
+import { http, postStreamed } from './http'
 
 export function getConfig(): Promise<BananaConfig> {
   return http.get<BananaConfig>('/banana-gen/config').then(r => r.data)
@@ -12,13 +12,16 @@ export function saveConfig(cfg: BananaConfig): Promise<BananaConfig> {
 }
 
 /** Gemini native. `signal` lets the caller abort a request already in flight, so
- *  stopping a batch drops open connections instead of waiting them out. */
+ *  stopping a batch drops open connections instead of waiting them out.
+ *
+ *  Heartbeat-streamed, same as the gpt-image endpoints — see api/http.ts. The
+ *  resolved value and the thrown error shape are unchanged.
+ */
 export function generate(
   req: BananaGenerateRequest,
   signal?: AbortSignal,
 ): Promise<BananaGenerateResponse> {
-  return http.post<BananaGenerateResponse>('/banana-gen/generate', req, { signal })
-    .then(r => r.data)
+  return postStreamed<BananaGenerateResponse>('/banana-gen/generate', req, signal)
 }
 
 /** OpenAI-compatible chat/completions. Same response shape comes back either
@@ -27,6 +30,5 @@ export function chat(
   req: BananaChatRequest,
   signal?: AbortSignal,
 ): Promise<BananaGenerateResponse> {
-  return http.post<BananaGenerateResponse>('/banana-gen/chat', req, { signal })
-    .then(r => r.data)
+  return postStreamed<BananaGenerateResponse>('/banana-gen/chat', req, signal)
 }

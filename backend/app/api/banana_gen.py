@@ -27,6 +27,10 @@ from ..core.imaging import (
     has_alpha_channel,
     image_dimensions,
 )
+# Both generation endpoints answer as a heartbeat stream rather than a plain JSON
+# body — an idle 60-120s connection gets reaped by proxies on the path. See
+# core/streaming.py for what that costs and why it is framed this way.
+from ..core.streaming import heartbeat_response
 from ..crud import user as user_crud
 from ..schemas.banana_config import BananaConfigOut, BananaConfigUpdate
 from ..schemas.banana_gen import (
@@ -410,7 +414,7 @@ def save_config(
     return user_crud.update_banana_config(db, current_user.id, body)
 
 
-@router.post("/generate", response_model=BananaGenerateResponse)
+@router.post("/generate")
 async def generate(
     body: BananaGenerateRequest,
     cfg: UpstreamConfig = Depends(get_banana_config),
@@ -420,6 +424,12 @@ async def generate(
     No `db` dependency: the config arrives as a snapshot with its session already
     closed, so no pooled connection is held across the upstream call. See
     core/deps.py.
+
+    Answers as a heartbeat stream, so `response_model` is gone from the
+    decorator — the shape is still BananaGenerateResponse, wrapped in the
+    envelope described in core/streaming.py. Note that resolve_model runs
+    *before* the stream opens: a bad model id is a real 400, and it costs
+    nothing to answer immediately.
     """
     model = resolve_model(body.model_id, cfg)
     payload = build_native_payload(body)
@@ -434,33 +444,36 @@ async def generate(
         ",".join(body.response_modalities or []) or "<omitted>",
     )
 
-    data, elapsed_ms, request_id = await call_upstream(
-        cfg, f"/v1beta/models/{model}:generateContent", payload
-    )
+    async def work() -> BananaGenerateResponse:
+        data, elapsed_ms, request_id = await call_upstream(
+            cfg, f"/v1beta/models/{model}:generateContent", payload
+        )
 
-    images, texts, reasons = parse_native(data)
-    usage = data.get("usageMetadata") or {}
+        images, texts, reasons = parse_native(data)
+        usage = data.get("usageMetadata") or {}
 
-    return BananaGenerateResponse(
-        images=images,
-        texts=texts,
-        model=model,
-        prompt=body.prompt,
-        elapsed_ms=elapsed_ms,
-        request_id=request_id,
-        aspect_ratio=body.aspect_ratio,
-        image_size=body.image_size,
-        finish_reasons=reasons,
-        candidate_count=len(data.get("candidates") or []),
-        prompt_tokens=usage.get("promptTokenCount"),
-        candidates_tokens=usage.get("candidatesTokenCount"),
-        total_tokens=usage.get("totalTokenCount"),
-        upstream_model=data.get("modelVersion"),
-        block_reason=None if images else block_reason_from(data, reasons),
-    )
+        return BananaGenerateResponse(
+            images=images,
+            texts=texts,
+            model=model,
+            prompt=body.prompt,
+            elapsed_ms=elapsed_ms,
+            request_id=request_id,
+            aspect_ratio=body.aspect_ratio,
+            image_size=body.image_size,
+            finish_reasons=reasons,
+            candidate_count=len(data.get("candidates") or []),
+            prompt_tokens=usage.get("promptTokenCount"),
+            candidates_tokens=usage.get("candidatesTokenCount"),
+            total_tokens=usage.get("totalTokenCount"),
+            upstream_model=data.get("modelVersion"),
+            block_reason=None if images else block_reason_from(data, reasons),
+        )
+
+    return heartbeat_response(work())
 
 
-@router.post("/chat", response_model=BananaGenerateResponse)
+@router.post("/chat")
 async def chat(
     body: BananaChatRequest,
     cfg: UpstreamConfig = Depends(get_banana_config),
@@ -469,9 +482,13 @@ async def chat(
 
     stream is deliberately never set: the documented example passes `true`, but a
     streamed body cannot be measured as a whole, and the byte size and magic-byte
-    format of the result are the point of running this at all.
+    format of the result are the point of running this at all. That is about the
+    *upstream* request and is unrelated to how this endpoint answers its own
+    client — the heartbeat framing below carries a whole, measured result.
 
     No `db` dependency, same as /generate — see core/deps.py.
+
+    Answers as a heartbeat stream; see core/streaming.py.
     """
     model = resolve_model(body.model_id, cfg)
 
@@ -489,35 +506,40 @@ async def chat(
         model, ",".join(body.modalities or []) or "<omitted>",
     )
 
-    data, elapsed_ms, request_id = await call_upstream(
-        cfg, "/v1/chat/completions", payload
-    )
+    async def work() -> BananaGenerateResponse:
+        data, elapsed_ms, request_id = await call_upstream(
+            cfg, "/v1/chat/completions", payload
+        )
 
-    images, texts = parse_chat(data)
-    usage = data.get("usage") or {}
+        images, texts = parse_chat(data)
+        usage = data.get("usage") or {}
 
-    # A 200 with text but no image is the documented symptom of modalities missing
-    # "image" — reported as a block reason so the card says why it is empty.
-    block = None
-    if not images:
-        block = "NO_IMAGE_IN_RESPONSE" if texts else "EMPTY_RESPONSE"
+        # A 200 with text but no image is the documented symptom of modalities
+        # missing "image" — reported as a block reason so the card says why it
+        # is empty.
+        block = None
+        if not images:
+            block = "NO_IMAGE_IN_RESPONSE" if texts else "EMPTY_RESPONSE"
 
-    return BananaGenerateResponse(
-        images=images,
-        texts=texts,
-        model=model,
-        prompt=body.prompt,
-        elapsed_ms=elapsed_ms,
-        request_id=request_id,
-        finish_reasons=[
-            str(c.get("finish_reason")) for c in (data.get("choices") or [])
-            if c.get("finish_reason")
-        ],
-        candidate_count=len(data.get("choices") or []),
-        # This surface reports OpenAI-style token names for the same three numbers.
-        prompt_tokens=usage.get("prompt_tokens"),
-        candidates_tokens=usage.get("completion_tokens"),
-        total_tokens=usage.get("total_tokens"),
-        upstream_model=data.get("model"),
-        block_reason=block,
-    )
+        return BananaGenerateResponse(
+            images=images,
+            texts=texts,
+            model=model,
+            prompt=body.prompt,
+            elapsed_ms=elapsed_ms,
+            request_id=request_id,
+            finish_reasons=[
+                str(c.get("finish_reason")) for c in (data.get("choices") or [])
+                if c.get("finish_reason")
+            ],
+            candidate_count=len(data.get("choices") or []),
+            # This surface reports OpenAI-style token names for the same three
+            # numbers.
+            prompt_tokens=usage.get("prompt_tokens"),
+            candidates_tokens=usage.get("completion_tokens"),
+            total_tokens=usage.get("total_tokens"),
+            upstream_model=data.get("model"),
+            block_reason=block,
+        )
+
+    return heartbeat_response(work())

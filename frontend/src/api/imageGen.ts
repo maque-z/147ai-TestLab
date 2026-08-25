@@ -1,5 +1,5 @@
 import type { ImageConfig, GenerateRequest, GenerateResponse } from '@/types'
-import { http } from './http'
+import { http, postStreamed } from './http'
 
 export function getConfig(): Promise<ImageConfig> {
   return http.get<ImageConfig>('/image-gen/config').then(r => r.data)
@@ -10,9 +10,14 @@ export function saveConfig(cfg: ImageConfig): Promise<ImageConfig> {
 }
 
 /** `signal` lets the caller abort a request that is already in flight, so
- *  stopping a batch drops open connections instead of waiting them out. */
+ *  stopping a batch drops open connections instead of waiting them out.
+ *
+ *  Goes through postStreamed because this endpoint answers with a heartbeat
+ *  stream — see api/http.ts for why. Resolves to the same GenerateResponse it
+ *  always did, and throws the same error shape, so callers are unaffected.
+ */
 export function generate(req: GenerateRequest, signal?: AbortSignal): Promise<GenerateResponse> {
-  return http.post<GenerateResponse>('/image-gen/generate', req, { signal }).then(r => r.data)
+  return postStreamed<GenerateResponse>('/image-gen/generate', req, signal)
 }
 
 /** The edits endpoint takes binary uploads, so this one goes out as multipart
@@ -43,5 +48,8 @@ export function edit(
   images.forEach(f => fd.append('images', f, f.name))
   if (mask) fd.append('mask', mask, 'mask.png')
 
-  return http.post<GenerateResponse>('/image-gen/edit', fd, { signal }).then(r => r.data)
+  // Heartbeat-streamed like /generate. The upload itself is unchanged — only the
+  // response framing differs, and postStreamed passes FormData through untouched
+  // so the browser still sets its own multipart boundary.
+  return postStreamed<GenerateResponse>('/image-gen/edit', fd, signal)
 }
