@@ -15,8 +15,10 @@ reap it.
 The cost, and it is unavoidable: **an HTTP status code is committed the moment
 the first byte leaves**, and that now happens long before the upstream answers.
 Errors raised after that point therefore cannot be a 4xx/5xx — they travel in
-the final line as ``{"ok": false, "status": ..., "detail": ...}`` and the
-frontend re-raises them shaped like the axios error they used to be.
+the final line as ``{"ok": false, "status": ..., "detail": ...}`` (plus an
+optional ``upstream`` snapshot of the raw exchange, when the failure got as far
+as an HTTP response) and the frontend re-raises them shaped like the axios
+error they used to be.
 
 Everything that can fail *before* the upstream call — auth, param validation,
 an unconfigured api_key, an oversized upload — deliberately stays outside this
@@ -76,7 +78,17 @@ async def _frames(work: Awaitable[BaseModel], interval: float) -> AsyncIterator[
         # propagates — which is correct: the only thing that cancels this task is
         # the `finally` below, i.e. the client already hung up.
         except HTTPException as exc:
-            yield _line(ok=False, status=exc.status_code, detail=str(exc.detail))
+            fields: dict[str, Any] = {
+                "ok": False, "status": exc.status_code, "detail": str(exc.detail),
+            }
+            # An UpstreamHTTPError (api/image_gen.py) hangs the raw exchange on
+            # the exception. getattr, not isinstance: this module stays ignorant
+            # of that subclass, and endpoints that raise plain HTTPExceptions
+            # (the Gemini ones) simply produce no `upstream` field.
+            upstream = getattr(exc, "upstream", None)
+            if isinstance(upstream, BaseModel):
+                fields["upstream"] = upstream.model_dump(mode="json")
+            yield _line(**fields)
         except Exception as exc:
             logger.exception("Unhandled error while streaming a generation")
             yield _line(

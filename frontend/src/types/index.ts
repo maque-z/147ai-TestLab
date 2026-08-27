@@ -60,6 +60,22 @@ export interface GeneratedImage {
   byte_size?: number
 }
 
+/** The raw upstream HTTP exchange behind one card, for the observation modal.
+ *
+ *  Headers are ordered [name, value] pairs straight off the wire — a record
+ *  would collapse duplicates and lose arrival order. `body` is the parsed JSON
+ *  with base64 image payloads replaced server-side by short stubs (the image
+ *  itself already travels in images[].b64_json); everything else is complete.
+ *  `body_text` carries a body that failed to parse as JSON instead. */
+export interface UpstreamSnapshot {
+  status: number
+  reason?: string
+  http_version?: string
+  headers: [string, string][]
+  body?: unknown
+  body_text?: string
+}
+
 export interface GenerateResponse {
   images: GeneratedImage[]
   model: string
@@ -81,6 +97,8 @@ export interface GenerateResponse {
   declared_format?: string
   /** Response-level background claim, documented as a top-level field. */
   declared_background?: string
+  /** The raw exchange this response was parsed from, base64 stubbed. */
+  upstream?: UpstreamSnapshot
 }
 
 /** The param matrix the UI expands into one upstream request per combination.
@@ -244,6 +262,10 @@ export interface TestResult {
   outputTokens?: number
   actualModel?: string
   error?: string
+  /** Raw response headers + body (base64 stubbed), viewable from the card.
+   *  Present for successes and for failures that got an HTTP response —
+   *  the refusal probes are only readable through this. */
+  upstream?: UpstreamSnapshot
 }
 
 export interface TestLogEntry {

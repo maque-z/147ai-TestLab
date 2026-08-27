@@ -23,13 +23,17 @@ http.interceptors.request.use(cfg => {
  *  failures are rebuilt into this shape rather than making every call site learn
  *  a second error format.
  */
-function streamedError(status: number, detail: string) {
+function streamedError(status: number, detail: string, upstream?: unknown) {
   const err = new Error(detail) as Error & {
     response: { status: number; data: { detail: string } }
     isStreamedError: true
+    upstream?: unknown
   }
   err.response = { status, data: { detail } }
   err.isStreamedError = true
+  // Raw upstream exchange, when the backend captured one for this failure.
+  // Optional and unread by most call sites; the test panel shows it.
+  if (upstream !== undefined) err.upstream = upstream
   return err
 }
 
@@ -87,7 +91,9 @@ export async function postStreamed<T>(
     throw streamedError(502, '连接在结果返回前中断，请重试')
   }
 
-  let envelope: { ok?: boolean; data?: T; status?: number; detail?: string }
+  let envelope: {
+    ok?: boolean; data?: T; status?: number; detail?: string; upstream?: unknown
+  }
   try {
     envelope = JSON.parse(last)
   } catch {
@@ -95,7 +101,7 @@ export async function postStreamed<T>(
   }
 
   if (!envelope.ok) {
-    throw streamedError(envelope.status ?? 502, envelope.detail || '生成失败')
+    throw streamedError(envelope.status ?? 502, envelope.detail || '生成失败', envelope.upstream)
   }
   return envelope.data as T
 }

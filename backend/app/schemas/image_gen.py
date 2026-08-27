@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Any, Optional, List
 
 # Bounds are deliberately wider than the vendor's documented ranges.
 #
@@ -58,6 +58,24 @@ class GeneratedImage(BaseModel):
     byte_size: Optional[int] = None
 
 
+class UpstreamSnapshot(BaseModel):
+    """One upstream HTTP exchange, verbatim, for the observation modal.
+
+    Headers are kept as ordered [name, value] pairs straight off the wire —
+    a dict would collapse duplicates (set-cookie) and lose the order they
+    actually arrived in. `body` is the parsed JSON with base64 image payloads
+    replaced by short stubs; everything else is complete. `body_text` carries
+    a body that failed to parse as JSON (an HTML error page from a mis-pointed
+    baseurl) instead.
+    """
+    status: int
+    reason: Optional[str] = None
+    http_version: Optional[str] = None
+    headers: List[List[str]] = Field(default_factory=list)
+    body: Any = None
+    body_text: Optional[str] = None
+
+
 class GenerateResponse(BaseModel):
     images: List[GeneratedImage]
     model: str
@@ -88,3 +106,7 @@ class GenerateResponse(BaseModel):
     # quality and size, but read defensively all the same — a gateway that
     # omits it is a finding, not a crash.
     declared_background: Optional[str] = None
+    # The raw exchange this card was built from, with base64 payloads stubbed.
+    # The parsed fields above are this tool's *reading* of the response; the
+    # snapshot is the evidence, so a claim can always be checked against it.
+    upstream: Optional[UpstreamSnapshot] = None

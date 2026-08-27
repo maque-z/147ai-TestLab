@@ -1,5 +1,6 @@
 import base64
 import logging
+import re
 import time
 
 import httpx
@@ -32,6 +33,7 @@ from ..schemas.image_gen import (
     GenerateRequest,
     GenerateResponse,
     GeneratedImage,
+    UpstreamSnapshot,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,11 +47,101 @@ MAX_MASK_BYTES = 4 * 1024 * 1024
 ALLOWED_INPUT_FORMATS = ("png", "jpeg", "webp")
 
 
-async def call_upstream(cfg: UpstreamConfig, path: str, **kwargs) -> tuple[dict, int, str | None]:
-    """POST to the upstream image API and return (json, elapsed_ms, request_id).
+# ── Raw-exchange capture ─────────────────────────────────────────────────────
+# The parsed GenerateResponse is this tool's reading of the upstream; the
+# snapshot below is the evidence behind it — full headers plus the body with
+# only the base64 image payloads stubbed out (they are megabytes each and
+# already travel separately as images[].b64_json).
+
+# A string this long made of nothing but base64 alphabet can only be a binary
+# payload. Prompts and revised prompts never match: they contain spaces, CJK,
+# punctuation. Anything shorter passes through whole — small enough to read.
+_B64_STUB_THRESHOLD = 1024
+# Enough head survives to identify the format by eye (iVBORw0KGgo → png,
+# /9j/ → jpeg, UklGR → webp) and to check it against the sniffed magic bytes.
+_B64_KEEP_PREFIX = 32
+_B64_ALPHABET = re.compile(r"[A-Za-z0-9+/=\r\n]+")
+# Non-JSON bodies are kept verbatim up to this length. Real API error bodies
+# are hundreds of bytes; only a pathological page (a portal login screen at a
+# mis-pointed baseurl) ever hits this.
+_TEXT_BODY_CAP = 100_000
+
+
+def _approx_bytes(b64_chars: int) -> str:
+    n = b64_chars * 3 // 4
+    return f"{n / 1048576:.1f} MB" if n >= 1048576 else f"{n / 1024:.0f} KB"
+
+
+def _stub_base64(s: str) -> str:
+    """Return `s`, or a short stub when it is a base64 image payload."""
+    if len(s) < _B64_STUB_THRESHOLD:
+        return s
+    prefix, payload = "", s
+    # data:image/png;base64,... — keep the self-describing prefix, stub the rest.
+    if s.startswith("data:"):
+        comma = s.find(",")
+        if comma == -1 or ";base64" not in s[:comma]:
+            return s
+        prefix, payload = s[:comma + 1], s[comma + 1:]
+    if not _B64_ALPHABET.fullmatch(payload):
+        return s
+    return (f"{prefix}{payload[:_B64_KEEP_PREFIX]}"
+            f"…[base64 已过滤 · 共 {len(payload):,} 字符 ≈ {_approx_bytes(len(payload))}]")
+
+
+def sanitize_body(obj):
+    """Deep-copy `obj` with base64 image payloads replaced by short stubs.
+
+    Everything that is not a giant base64 string comes through complete — the
+    point of the snapshot is observing every field the API sent, not shipping
+    the image twice.
+    """
+    if isinstance(obj, str):
+        return _stub_base64(obj)
+    if isinstance(obj, list):
+        return [sanitize_body(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: sanitize_body(v) for k, v in obj.items()}
+    return obj
+
+
+def _snapshot(resp: httpx.Response, *, body=None, body_text=None) -> UpstreamSnapshot:
+    return UpstreamSnapshot(
+        status=resp.status_code,
+        # Empty on HTTP/2 — the protocol dropped reason phrases.
+        reason=resp.reason_phrase or None,
+        http_version=resp.http_version,
+        # multi_items, not dict: keeps arrival order and duplicate keys.
+        headers=[[k, v] for k, v in resp.headers.multi_items()],
+        body=body,
+        body_text=body_text,
+    )
+
+
+class UpstreamHTTPError(HTTPException):
+    """An upstream failure that still produced a real HTTP response.
+
+    Carries the raw exchange so a refusal is observable with the same fidelity
+    as a success — the suite's refusal probes exist precisely to read these
+    bodies, and headers (request ids, ratelimit state) matter most when things
+    fail. core/streaming.py picks `.upstream` up by getattr, so the Gemini
+    endpoints, which raise plain HTTPExceptions, are unaffected.
+    """
+
+    def __init__(self, status_code: int, detail: str, upstream: UpstreamSnapshot):
+        super().__init__(status_code=status_code, detail=detail)
+        self.upstream = upstream
+
+
+async def call_upstream(
+    cfg: UpstreamConfig, path: str, **kwargs
+) -> tuple[dict, int, str | None, UpstreamSnapshot]:
+    """POST to the upstream image API and return (json, elapsed_ms, request_id,
+    snapshot).
 
     Every failure mode is turned into an HTTPException carrying a message that is
     worth showing to the user, since the card in the UI displays it verbatim.
+    Failures that got as far as an HTTP response carry the raw exchange too.
     """
     endpoint = f"{cfg.baseurl.rstrip('/')}{path}"
     headers = {"Authorization": f"Bearer {cfg.api_key}"}
@@ -73,20 +165,29 @@ async def call_upstream(cfg: UpstreamConfig, path: str, **kwargs) -> tuple[dict,
                 detail = (err.get("error", {}).get("message")
                           or err.get("detail")
                           or body_text)
+                snap = _snapshot(resp, body=sanitize_body(err))
             except Exception:
                 detail = body_text
-            raise HTTPException(status_code=resp.status_code, detail=detail)
+                snap = _snapshot(resp, body_text=body_text[:_TEXT_BODY_CAP])
+            raise UpstreamHTTPError(resp.status_code, detail, snap)
 
         raw = resp.text
         if not raw:
             logger.error("Empty response body from API (status %s)", resp.status_code)
-            raise HTTPException(status_code=502, detail="API 返回了空响应，请检查模型 ID 和 baseurl 配置")
+            raise UpstreamHTTPError(
+                502, "API 返回了空响应，请检查模型 ID 和 baseurl 配置",
+                _snapshot(resp, body_text=""),
+            )
 
         try:
-            return resp.json(), elapsed_ms, request_id
+            data = resp.json()
         except Exception as exc:
             logger.error("JSON parse failed. Raw response: %s", raw[:500])
-            raise HTTPException(status_code=502, detail=f"API 响应格式错误: {exc}")
+            raise UpstreamHTTPError(
+                502, f"API 响应格式错误: {exc}",
+                _snapshot(resp, body_text=raw[:_TEXT_BODY_CAP]),
+            )
+        return data, elapsed_ms, request_id, _snapshot(resp, body=sanitize_body(data))
 
     except HTTPException:
         raise
@@ -98,7 +199,8 @@ async def call_upstream(cfg: UpstreamConfig, path: str, **kwargs) -> tuple[dict,
 
 
 def build_response(data: dict, *, cfg, prompt: str, payload: dict,
-                   elapsed_ms: int, request_id: str | None) -> GenerateResponse:
+                   elapsed_ms: int, request_id: str | None,
+                   upstream: UpstreamSnapshot | None = None) -> GenerateResponse:
     """Shape one upstream response into the card the UI renders."""
     declared_format = data.get("output_format")
     usage = data.get("usage") or {}
@@ -142,6 +244,7 @@ def build_response(data: dict, *, cfg, prompt: str, payload: dict,
         upstream_model=data.get("model"),
         declared_format=declared_format,
         declared_background=data.get("background"),
+        upstream=upstream,
     )
 
 
@@ -231,12 +334,13 @@ async def generate(
             payload.get("background", "<default>"),
         )
 
-        data, elapsed_ms, request_id = await call_upstream(
+        data, elapsed_ms, request_id, snap = await call_upstream(
             cfg, "/v1/images/generations", json=payload
         )
 
         return build_response(data, cfg=cfg, prompt=body.prompt, payload=payload,
-                              elapsed_ms=elapsed_ms, request_id=request_id)
+                              elapsed_ms=elapsed_ms, request_id=request_id,
+                              upstream=snap)
 
     return heartbeat_response(work())
 
@@ -364,10 +468,11 @@ async def edit(
     # safe: the UploadFile handles are not touched again after the response
     # starts, so Starlette is free to clean them up whenever it likes.
     async def work() -> GenerateResponse:
-        data, elapsed_ms, request_id = await call_upstream(
+        data, elapsed_ms, request_id, snap = await call_upstream(
             cfg, "/v1/images/edits", data=form, files=files
         )
         return build_response(data, cfg=cfg, prompt=prompt, payload=payload,
-                              elapsed_ms=elapsed_ms, request_id=request_id)
+                              elapsed_ms=elapsed_ms, request_id=request_id,
+                              upstream=snap)
 
     return heartbeat_response(work())

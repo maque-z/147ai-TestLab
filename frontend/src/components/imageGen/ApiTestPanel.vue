@@ -90,6 +90,14 @@
               <span v-else-if="result.verdict === 'ratelimit'" class="status-dot rl">⚡</span>
               <span v-else                                   class="status-dot info">·</span>
               <span class="card-label">{{ result.case.label }}</span>
+              <!-- Raw exchange viewer. Present on errors too — the refusal
+                   probes are only readable through this. -->
+              <button
+                v-if="result.upstream"
+                class="raw-open-btn"
+                title="查看本次请求的原始响应（响应头 + 响应体 · base64 已过滤）"
+                @click.stop="openRaw(result)"
+              >{}</button>
             </div>
 
             <!-- Image -->
@@ -124,6 +132,13 @@
       </div>
 
     </div>
+
+    <!-- Raw response transcript for the card whose {} was clicked -->
+    <RawResponseViewer
+      v-model:show="rawShow"
+      :title="rawResult?.case.label ?? ''"
+      :snapshot="rawResult?.upstream ?? null"
+    />
   </div>
 </template>
 
@@ -132,6 +147,7 @@ import { ref, watch, nextTick, computed } from 'vue'
 import { NSpin } from 'naive-ui'
 import { useApiTestStore, TEST_CASE_COUNT, CONCURRENCY } from '@/stores/apiTest'
 import { useImageGenStore } from '@/stores/imageGen'
+import RawResponseViewer from './RawResponseViewer.vue'
 import type { TestResult } from '@/types'
 
 const store     = useApiTestStore()
@@ -140,6 +156,14 @@ const imageGen  = useImageGenStore()
 const terminalEl = ref<HTMLElement | null>(null)
 const gridEl     = ref<HTMLElement | null>(null)
 const copied     = ref(false)
+
+const rawShow   = ref(false)
+const rawResult = ref<TestResult | null>(null)
+
+function openRaw(result: TestResult) {
+  rawResult.value = result
+  rawShow.value = true
+}
 
 const blockReason = computed(() => {
   if (!imageGen.config.api_key) return '请先在配置中填写 API Key'
@@ -353,6 +377,25 @@ async function copySummary() {
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1;
+}
+
+/* Opens the raw-response transcript. Monospace braces so it reads as "JSON". */
+.raw-open-btn {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: 'Consolas', 'Menlo', 'Monaco', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  padding: 0 3px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.raw-open-btn:hover {
+  color: #5A89C8;
+  background: rgba(90, 137, 200, 0.14);
 }
 
 /* Count badge sits over the thumbnail; the wrapper is its containing block. */

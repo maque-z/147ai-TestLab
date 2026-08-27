@@ -410,6 +410,7 @@ export const useApiTestStore = defineStore('apiTest', () => {
             inputTokens:   res.input_tokens ?? undefined,
             outputTokens:  res.output_tokens ?? undefined,
             actualModel:   res.upstream_model ?? undefined,
+            upstream:      res.upstream ?? undefined,
           } as Partial<TestResult>)
 
           const icon = verdict === 'pass' ? '✓' : verdict === 'fail' ? '✗' : '·'
@@ -435,6 +436,9 @@ export const useApiTestStore = defineStore('apiTest', () => {
                      : errMsg,
             elapsedMs: elapsed,
             error:     errMsg,
+            // Failures that got an HTTP response carry the raw exchange too —
+            // what a refusal actually looks like on the wire is the finding.
+            upstream:  e?.upstream ?? undefined,
           } as Partial<TestResult>)
 
           const label = is429 ? `⚡ ${c.label}  限流 429`
