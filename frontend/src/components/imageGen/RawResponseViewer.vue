@@ -185,7 +185,6 @@ async function copyRaw() {
 }
 .vendor-badge.k-openai  { color: #4DC98C; background: rgba(77, 201, 140, 0.12); }
 .vendor-badge.k-azure   { color: #5A9BD5; background: rgba(90, 155, 213, 0.14); }
-.vendor-badge.k-other   { color: #E5A43A; background: rgba(229, 164, 58, 0.13); }
 .vendor-badge.k-unknown { color: #8B93A3; background: rgba(139, 147, 163, 0.13); }
 
 .vendor-evidence {
