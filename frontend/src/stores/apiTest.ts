@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type {
-  TestCase, TestResult, TestLogEntry, TestVerdict, GenerateRequest, GenerateResponse,
+  TestCase, TestResult, TestLogEntry, TestVerdict, TestDimension,
+  GenerateRequest, GenerateResponse,
 } from '@/types'
 import * as imageGenApi from '@/api/imageGen'
 import { useImageGenStore } from '@/stores/imageGen'
@@ -132,6 +133,28 @@ function buildTestCases(): TestCase[] {
  *  is quoted in the UI as the credit the run will spend. */
 export const TEST_CASE_COUNT = buildTestCases().length
 
+/** One checkbox per dimension in the panel. Derived from the case list itself so
+ *  labels, counts and order can never drift from what actually runs. */
+export const DIMENSION_OPTIONS = (() => {
+  const labels: Record<TestDimension, string> = {
+    size: 'size 尺寸',
+    quality: 'quality 质量',
+    format: 'output_format 格式',
+    compression: 'compression 压缩',
+    n: 'n 多图',
+    background: 'background 透明度',
+    edit: '编辑端点',
+  }
+  const all = buildTestCases()
+  const order: TestDimension[] = []
+  for (const c of all) if (!order.includes(c.dimension)) order.push(c.dimension)
+  return order.map(key => ({
+    key,
+    label: labels[key],
+    count: all.filter(c => c.dimension === key).length,
+  }))
+})()
+
 /** Cards are capped at this value for consistency with the generate/edit pools.
  *  In practice run() calls clear() first so this is a guard rather than a
  *  live eviction path — a single suite is only 17 cards. */
@@ -259,6 +282,15 @@ export const useApiTestStore = defineStore('apiTest', () => {
   const results = ref<TestResult[]>([])
   const running = ref(false)
   const summary = ref('')
+  /** Which dimensions the next run will probe. Defaults to everything; the
+   *  panel renders one checkbox per entry. */
+  const selectedDims = ref<TestDimension[]>(DIMENSION_OPTIONS.map(o => o.key))
+
+  /** How many probes the current selection amounts to — quoted in the header
+   *  and on the start button as the credit the run will spend. */
+  const selectedCount = computed(() =>
+    buildTestCases().filter(c => selectedDims.value.includes(c.dimension)).length,
+  )
 
   let logSeq = 0
   let ctl: AbortController | null = null
@@ -322,7 +354,11 @@ export const useApiTestStore = defineStore('apiTest', () => {
   /** The suite itself. Split out so run() owns the running/ctl lifecycle and a
    *  failure in here cannot leave the panel stuck. */
   async function runSuite(signal: AbortSignal) {
-    const cases = buildTestCases()
+    const cases = buildTestCases().filter(c => selectedDims.value.includes(c.dimension))
+    if (!cases.length) {
+      addLog('warn', '⚠ 未勾选任何检测项')
+      return
+    }
     results.value = cases.map(c => ({ case: c, status: 'pending' as const }))
 
     const total = cases.length
@@ -331,16 +367,18 @@ export const useApiTestStore = defineStore('apiTest', () => {
     addLog('info', `生成 Prompt: "${DEFAULT_PROMPT.slice(0, 30)}…" | 编辑 Prompt: "${EDIT_PROMPT}"`)
     addLog('rule', '')
 
-    // Load the seed image for the edit probe.
+    // Load the seed image for the edit probe — only when one is selected.
     let seedFile: File | null = null
-    try {
-      const resp = await fetch('/spring.jpg')
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-      const blob = await resp.blob()
-      seedFile = new File([blob], 'spring.jpg', { type: 'image/jpeg' })
-      addLog('info', `参考图 spring.jpg 已加载 (${(blob.size / 1024).toFixed(0)} KB · 350×229)`)
-    } catch (e: any) {
-      addLog('warn', `⚠ spring.jpg 加载失败，编辑探测将跳过: ${e?.message ?? e}`)
+    if (cases.some(c => c.isEdit)) {
+      try {
+        const resp = await fetch('/spring.jpg')
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        const blob = await resp.blob()
+        seedFile = new File([blob], 'spring.jpg', { type: 'image/jpeg' })
+        addLog('info', `参考图 spring.jpg 已加载 (${(blob.size / 1024).toFixed(0)} KB · 350×229)`)
+      } catch (e: any) {
+        addLog('warn', `⚠ spring.jpg 加载失败，编辑探测将跳过: ${e?.message ?? e}`)
+      }
     }
 
     const t0 = performance.now()
@@ -550,72 +588,82 @@ export const useApiTestStore = defineStore('apiTest', () => {
     const lines: string[] = [
       `${model} 参数兼容性报告（${date}）`,
       `测试数: ${results.value.length} · 并发: ${CONCURRENCY} · 用时: ${(elapsedMs / 1000).toFixed(1)}s`,
-      '',
     ]
+
+    // Sections print only when their dimension was selected for this run —
+    // an empty "0/0 生效" block reads like a failure, not like an omission.
 
     // size group
     const sizeResults = results.value.filter(r => r.case.dimension === 'size')
-    const sizePass = sizeResults.filter(r => r.verdict === 'pass').length
-    const sizeFail = sizeResults.filter(r => r.verdict === 'fail')
-    lines.push(`■ size  ${sizePass}/${sizeResults.length} 生效` +
-      (sizeFail.length ? `  失败: ${sizeFail.map(r => r.case.req.size).join(' / ')}` : ''))
-    sizeResults.forEach(r => lines.push(`  · ${r.detail ?? ''}  ${r.verdict === 'pass' ? '✓' : '✗'}`))
-
-    lines.push('')
+    if (sizeResults.length) {
+      const sizePass = sizeResults.filter(r => r.verdict === 'pass').length
+      const sizeFail = sizeResults.filter(r => r.verdict === 'fail')
+      lines.push('')
+      lines.push(`■ size  ${sizePass}/${sizeResults.length} 生效` +
+        (sizeFail.length ? `  失败: ${sizeFail.map(r => r.case.req.size).join(' / ')}` : ''))
+      sizeResults.forEach(r => lines.push(`  · ${r.detail ?? ''}  ${r.verdict === 'pass' ? '✓' : '✗'}`))
+    }
 
     // quality group
     const qr = results.value.filter(r => r.case.dimension === 'quality')
-    lines.push(`■ quality`)
-    qr.forEach(r => {
-      const q = r.case.req.quality
-      lines.push(`  · ${q}  output_tokens=${r.outputTokens ?? '?'}  ${r.verdict === 'pass' ? '✓ 顺序符合预期' : r.verdict === 'fail' ? '✗ 顺序异常' : '· 记录'}`)
-    })
-
-    lines.push('')
+    if (qr.length) {
+      lines.push('')
+      lines.push(`■ quality`)
+      qr.forEach(r => {
+        const q = r.case.req.quality
+        lines.push(`  · ${q}  output_tokens=${r.outputTokens ?? '?'}  ${r.verdict === 'pass' ? '✓ 顺序符合预期' : r.verdict === 'fail' ? '✗ 顺序异常' : '· 记录'}`)
+      })
+    }
 
     // format group
     const fr = results.value.filter(r => r.case.dimension === 'format')
-    const fpass = fr.filter(r => r.verdict === 'pass').length
-    lines.push(`■ output_format  ${fpass}/${fr.length} 生效`)
-    fr.forEach(r => lines.push(`  · ${r.detail ?? ''}  ${r.verdict === 'pass' ? '✓' : '✗'}`))
-
-    lines.push('')
+    if (fr.length) {
+      const fpass = fr.filter(r => r.verdict === 'pass').length
+      lines.push('')
+      lines.push(`■ output_format  ${fpass}/${fr.length} 生效`)
+      fr.forEach(r => lines.push(`  · ${r.detail ?? ''}  ${r.verdict === 'pass' ? '✓' : '✗'}`))
+    }
 
     // compression group
     const cr = results.value.filter(r => r.case.dimension === 'compression')
-    const cpass = cr.filter(r => r.verdict === 'pass').length
-    lines.push(`■ output_compression  ${cpass > 0 ? '生效' : '未验证'}`)
-    cr.forEach(r => lines.push(`  · ${r.detail ?? ''}`))
-
-    lines.push('')
+    if (cr.length) {
+      const cpass = cr.filter(r => r.verdict === 'pass').length
+      lines.push('')
+      lines.push(`■ output_compression  ${cpass > 0 ? '生效' : '未验证'}`)
+      cr.forEach(r => lines.push(`  · ${r.detail ?? ''}`))
+    }
 
     // n group — the only hard count in the suite
     const nr = results.value.filter(r => r.case.dimension === 'n')
-    const npass = nr.filter(r => r.verdict === 'pass').length
-    lines.push(`■ n  ${npass}/${nr.length} 生效`)
-    nr.forEach(r => lines.push(`  · ${r.detail ?? ''}  ${r.verdict === 'pass' ? '✓' : '✗'}`))
-
-    lines.push('')
+    if (nr.length) {
+      const npass = nr.filter(r => r.verdict === 'pass').length
+      lines.push('')
+      lines.push(`■ n  ${npass}/${nr.length} 生效`)
+      nr.forEach(r => lines.push(`  · ${r.detail ?? ''}  ${r.verdict === 'pass' ? '✓' : '✗'}`))
+    }
 
     // background — the only group whose outcome is measured from the pixels
     const br = results.value.filter(r => r.case.dimension === 'background')
-    const bpass = br.filter(r => r.verdict === 'pass').length
-    const bscored = br.filter(r => !r.case.expectRefusal).length
-    lines.push(`■ background  ${bpass}/${bscored} 生效（透明度由像素采样判定）`)
-    br.forEach(r => {
-      const mark = r.case.expectRefusal ? '·' : r.verdict === 'pass' ? '✓' : '✗'
-      lines.push(`  · ${r.detail ?? ''}  ${mark}`)
-    })
-
-    lines.push('')
+    if (br.length) {
+      const bpass = br.filter(r => r.verdict === 'pass').length
+      const bscored = br.filter(r => !r.case.expectRefusal).length
+      lines.push('')
+      lines.push(`■ background  ${bpass}/${bscored} 生效（透明度由像素采样判定）`)
+      br.forEach(r => {
+        const mark = r.case.expectRefusal ? '·' : r.verdict === 'pass' ? '✓' : '✗'
+        lines.push(`  · ${r.detail ?? ''}  ${mark}`)
+      })
+    }
 
     // edit
     const edit = results.value.find(r => r.case.dimension === 'edit')
-    lines.push(`■ 编辑端点（spring.jpg + "${EDIT_PROMPT}"）  ${edit?.status === 'done' ? (edit.verdict === 'pass' ? '✓ 正常' : '✗ 异常') : '未完成'}`)
-
-    lines.push('')
+    if (edit) {
+      lines.push('')
+      lines.push(`■ 编辑端点（spring.jpg + "${EDIT_PROMPT}"）  ${edit.status === 'done' ? (edit.verdict === 'pass' ? '✓ 正常' : '✗ 异常') : '未完成'}`)
+    }
 
     // vendor — judged from the raw exchanges, evidence quoted
+    lines.push('')
     lines.push(`■ 来源判定  ${vendorLine()}`)
 
     return lines.join('\n')
@@ -623,6 +671,7 @@ export const useApiTestStore = defineStore('apiTest', () => {
 
   return {
     logs, results, running, summary,
+    selectedDims, selectedCount,
     passCount, failCount, doneCount, totalCount,
     run, stop, clear,
   }

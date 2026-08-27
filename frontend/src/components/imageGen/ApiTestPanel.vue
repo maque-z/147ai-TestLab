@@ -6,7 +6,8 @@
       <div class="header-left">
         <span class="test-title">API 参数兼容性测试</span>
         <span class="test-meta">
-          {{ TEST_CASE_COUNT }} 个探测 · 并发 {{ CONCURRENCY }} · spring.jpg 参考图
+          {{ store.selectedCount }}/{{ TEST_CASE_COUNT }} 个探测 · 并发 {{ CONCURRENCY }} · spring.jpg 参考图
+          <span class="build-tag" title="前端构建版本（commit · 构建时间 UTC）">前端构建 {{ BUILD }}</span>
         </span>
       </div>
       <div class="header-right">
@@ -17,7 +18,7 @@
           v-if="!store.running"
           class="btn btn-primary"
           :disabled="!!blockReason"
-          :title="blockReason || `并发发射全部探测，约消耗 ${TEST_CASE_COUNT} 次生图额度`"
+          :title="blockReason || `并发发射勾选的探测，约消耗 ${store.selectedCount} 次生图额度`"
           @click="store.run()"
         >
           ▶ 开始测试
@@ -36,6 +37,33 @@
           @click="store.clear()"
         >
           🗑 清除
+        </button>
+      </div>
+
+      <!-- Dimension checkboxes: pick what the next run probes -->
+      <div class="dim-select">
+        <label
+          v-for="opt in DIMENSION_OPTIONS"
+          :key="opt.key"
+          :class="['dim-chip', {
+            on: store.selectedDims.includes(opt.key),
+            disabled: store.running,
+          }]"
+        >
+          <input
+            v-model="store.selectedDims"
+            type="checkbox"
+            :value="opt.key"
+            :disabled="store.running"
+          />
+          {{ opt.label }}<span class="dim-count">{{ opt.count }}</span>
+        </label>
+        <button
+          class="dim-all"
+          :disabled="store.running"
+          @click="toggleAll"
+        >
+          {{ allSelected ? '全不选' : '全选' }}
         </button>
       </div>
     </div>
@@ -145,13 +173,16 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, computed } from 'vue'
 import { NSpin } from 'naive-ui'
-import { useApiTestStore, TEST_CASE_COUNT, CONCURRENCY } from '@/stores/apiTest'
+import { useApiTestStore, TEST_CASE_COUNT, CONCURRENCY, DIMENSION_OPTIONS } from '@/stores/apiTest'
 import { useImageGenStore } from '@/stores/imageGen'
 import RawResponseViewer from './RawResponseViewer.vue'
 import type { TestResult } from '@/types'
 
 const store     = useApiTestStore()
 const imageGen  = useImageGenStore()
+
+/** Which commit built the page — the anti-"stale deployment" stamp. */
+const BUILD = __BUILD_INFO__
 
 const terminalEl = ref<HTMLElement | null>(null)
 const gridEl     = ref<HTMLElement | null>(null)
@@ -165,8 +196,15 @@ function openRaw(result: TestResult) {
   rawShow.value = true
 }
 
+const allSelected = computed(() => store.selectedDims.length === DIMENSION_OPTIONS.length)
+
+function toggleAll() {
+  store.selectedDims = allSelected.value ? [] : DIMENSION_OPTIONS.map(o => o.key)
+}
+
 const blockReason = computed(() => {
   if (!imageGen.config.api_key) return '请先在配置中填写 API Key'
+  if (!store.selectedDims.length) return '请至少勾选一个检测项'
   return ''
 })
 
@@ -219,6 +257,8 @@ async function copySummary() {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   padding: 12px 16px;
   border-radius: var(--radius-card);
   background: var(--bg);
@@ -228,11 +268,66 @@ async function copySummary() {
 .test-title  { font-weight: 700; font-size: 13px; color: var(--text-primary); }
 .test-meta   { font-size: 11px; color: var(--text-muted); }
 
+.build-tag {
+  margin-left: 8px;
+  font-size: 10px;
+  font-family: 'Consolas', 'Menlo', 'Monaco', monospace;
+  opacity: 0.75;
+}
+
 .header-right {
   display: flex;
   align-items: center;
   gap: 10px;
 }
+
+/* ── Dimension checkboxes ── */
+.dim-select {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.dim-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--text-muted);
+  box-shadow: 2px 2px 4px var(--shadow-dark), -2px -2px 4px var(--shadow-light);
+  user-select: none;
+  transition: color 0.12s, box-shadow 0.12s;
+}
+.dim-chip input { display: none; }
+.dim-chip.on {
+  color: #5A89C8;
+  font-weight: 600;
+  box-shadow: inset 2px 2px 4px var(--shadow-dark), inset -2px -2px 4px var(--shadow-light);
+}
+.dim-chip.disabled { opacity: 0.55; pointer-events: none; }
+
+.dim-count {
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.dim-all {
+  border: none;
+  background: transparent;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: 6px;
+}
+.dim-all:hover:not(:disabled) { color: #5A89C8; }
+.dim-all:disabled { opacity: 0.55; cursor: default; }
 
 .progress-label {
   font-variant-numeric: tabular-nums;
