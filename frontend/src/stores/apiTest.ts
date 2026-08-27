@@ -6,6 +6,7 @@ import type {
 import * as imageGenApi from '@/api/imageGen'
 import { useImageGenStore } from '@/stores/imageGen'
 import { b64ToBlobUrl, runPool, sampleAlpha } from '@/utils/batch'
+import { detectVendor, aggregateVendor } from '@/utils/vendor'
 import { DEFAULT_PROMPT } from '@/utils/defaultPrompt'
 
 // ─── Test suite definition ──────────────────────────────────────────────────
@@ -459,6 +460,11 @@ export const useApiTestStore = defineStore('apiTest', () => {
     // Compression: verify byte sizes change with compression level.
     postEvalCompression()
 
+    // Who actually answered — judged from every captured raw exchange at once.
+    // All probes hit the same configured baseurl, so agreement is expected and
+    // a split is itself a finding (a gateway balancing across upstreams).
+    addLog('info', `来源判定: ${vendorLine()}`)
+
     const elapsed = Math.round(performance.now() - t0)
     addLog('rule', '')
     addLog('info', `测试完成 ${doneCount.value}/${total}  ✓${passCount.value} ✗${failCount.value}  用时 ${(elapsed / 1000).toFixed(1)}s`)
@@ -528,6 +534,13 @@ export const useApiTestStore = defineStore('apiTest', () => {
   }
 
   // ── Summary ──────────────────────────────────────────────────────────────
+
+  /** One line naming the vendor behind the gateway, from all raw exchanges. */
+  function vendorLine(): string {
+    return aggregateVendor(
+      results.value.map(r => r.upstream ? detectVendor(r.upstream) : null),
+    )
+  }
 
   function buildSummary(elapsedMs: number): string {
     const now  = new Date()
@@ -599,6 +612,11 @@ export const useApiTestStore = defineStore('apiTest', () => {
     // edit
     const edit = results.value.find(r => r.case.dimension === 'edit')
     lines.push(`■ 编辑端点（spring.jpg + "${EDIT_PROMPT}"）  ${edit?.status === 'done' ? (edit.verdict === 'pass' ? '✓ 正常' : '✗ 异常') : '未完成'}`)
+
+    lines.push('')
+
+    // vendor — judged from the raw exchanges, evidence quoted
+    lines.push(`■ 来源判定  ${vendorLine()}`)
 
     return lines.join('\n')
   }

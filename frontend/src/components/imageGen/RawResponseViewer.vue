@@ -13,6 +13,12 @@
           </button>
           <button class="raw-btn close" title="关闭 ( Esc )" @click="close">×</button>
         </div>
+        <!-- Who actually answered, judged from the headers/body below. The
+             evidence is quoted so the verdict can always be second-guessed. -->
+        <div v-if="verdict" class="raw-vendor">
+          <span :class="['vendor-badge', `k-${verdict.vendor}`]">{{ verdict.label }}</span>
+          <span class="vendor-evidence">{{ verdict.evidence.join(' · ') }}</span>
+        </div>
         <!-- One merged transcript: status line, every header, blank line, body.
              Reads like the wire format so it can be pasted into a report as-is. -->
         <pre class="raw-pre">{{ rawText }}</pre>
@@ -24,6 +30,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { NModal } from 'naive-ui'
+import { detectVendor } from '@/utils/vendor'
 import type { UpstreamSnapshot } from '@/types'
 
 const props = defineProps<{
@@ -39,6 +46,8 @@ const emit = defineEmits<{
 const copied = ref(false)
 
 const statusOk = computed(() => (props.snapshot?.status ?? 0) < 400)
+
+const verdict = computed(() => props.snapshot ? detectVendor(props.snapshot) : null)
 
 const rawText = computed(() => {
   const s = props.snapshot
@@ -155,6 +164,37 @@ async function copyRaw() {
   padding: 3px 7px;
 }
 .raw-btn.close:hover { color: #E05D5D; }
+
+/* ── Vendor verdict strip ── */
+.raw-vendor {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 14px;
+  background: #20242D;
+  border-bottom: 1px solid #2E3340;
+  flex-shrink: 0;
+}
+
+.vendor-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 6px;
+}
+.vendor-badge.k-openai  { color: #4DC98C; background: rgba(77, 201, 140, 0.12); }
+.vendor-badge.k-azure   { color: #5A9BD5; background: rgba(90, 155, 213, 0.14); }
+.vendor-badge.k-other   { color: #E5A43A; background: rgba(229, 164, 58, 0.13); }
+.vendor-badge.k-unknown { color: #8B93A3; background: rgba(139, 147, 163, 0.13); }
+
+.vendor-evidence {
+  font-family: 'Consolas', 'Menlo', 'Monaco', monospace;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: #8B93A3;
+  word-break: break-all;
+}
 
 .raw-pre {
   margin: 0;
