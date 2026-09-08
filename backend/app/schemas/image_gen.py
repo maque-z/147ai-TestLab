@@ -50,13 +50,37 @@ class GenerateRequest(BaseModel):
 
 class GeneratedImage(BaseModel):
     b64_json: Optional[str] = None
+    # Kept only when the upstream handed out an http(s) link (see data_kind);
+    # a data: URL is unpacked into b64_json instead of being shipped twice.
     url: Optional[str] = None
     revised_prompt: Optional[str] = None
-    # Real format sniffed from magic bytes — the API's declared output_format
-    # does not always match the actual bytes.
+    # Real format sniffed from magic bytes - the API's declared output_format
+    # does not always match the actual bytes. None when there were no bytes to
+    # sniff (a link that could not be downloaded), and deliberately *not*
+    # backfilled from the declaration: a claim standing in for a measurement
+    # is exactly what this tool exists to avoid.
     image_format: Optional[str] = None
     byte_size: Optional[int] = None
-
+    # How the upstream actually delivered the image. The official reference is
+    # explicit for GPT image models: b64_json is "returned by default" and
+    # url is "unsupported", so anything but b64_json is itself a finding:
+    #   b64_json  raw base64 in the documented field
+    #   data_url  a data:image/...;base64, string - a re-serialising gateway
+    #   url       an http(s) link - a gateway re-hosting the file, or a
+    #             ChatGPT-web relay handing out its own download link; fetched
+    #             server-side so the bytes can still be measured
+    #   none      the item carried no image at all
+    data_kind: Optional[str] = None
+    # Which wire field carried it: b64_json / url / result. `result` is the
+    # field name inside a Responses API image_generation_call; seeing it here
+    # means a gateway forwarded that item without converting it.
+    data_field: Optional[str] = None
+    # The link exactly as returned, when data_kind is url. Its host is
+    # evidence: oaiusercontent.com is ChatGPT's file store, not the Images API.
+    source_url: Optional[str] = None
+    # Why the link could not be downloaded, when it could not. The card then
+    # renders the link directly and reports the bytes as unmeasurable.
+    fetch_error: Optional[str] = None
 
 class UpstreamSnapshot(BaseModel):
     """One upstream HTTP exchange, verbatim, for the observation modal.

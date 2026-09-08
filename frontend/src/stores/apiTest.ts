@@ -2,12 +2,12 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type {
   TestCase, TestResult, TestLogEntry, TestVerdict, TestDimension,
-  GenerateRequest, GenerateResponse,
+  GenerateRequest, GenerateResponse, GeneratedImage, ImageDataKind,
 } from '@/types'
 import * as imageGenApi from '@/api/imageGen'
 import { useImageGenStore } from '@/stores/imageGen'
 import { b64ToBlobUrl, runPool, sampleAlpha } from '@/utils/batch'
-import { detectVendor, aggregateVendor } from '@/utils/vendor'
+import { detectVendor, aggregateVendor, describeDataKind } from '@/utils/vendor'
 import { DEFAULT_PROMPT } from '@/utils/defaultPrompt'
 
 // ─── Test suite definition ──────────────────────────────────────────────────
@@ -190,7 +190,7 @@ function parseSize(s: string): [number, number] | null {
 function evaluate(
   c: TestCase,
   res: GenerateResponse,
-  img: { b64_json?: string; image_format?: string; byte_size?: number } | undefined,
+  img: GeneratedImage | undefined,
   dims: { w: number; h: number } | null,
   hasAlpha: boolean | null,
 ): { verdict: TestVerdict; detail: string } {
@@ -219,8 +219,14 @@ function evaluate(
     }
 
     case 'format': {
-      const actual = img?.image_format ?? '?'
       const requested = c.req.output_format!
+      const actual = img?.image_format
+      // No bytes to sniff - a link the backend could not download. The API's
+      // declared format is a claim, not a measurement, so nothing is scored.
+      if (!actual) {
+        const why = img?.fetch_error ? `（${img.fetch_error}）` : ''
+        return { verdict: 'info', detail: `请求 ${requested} → 字节不可得，无法验证${why}` }
+      }
       const pass = actual === requested || (requested === 'jpeg' && actual === 'jpg')
       return {
         verdict: pass ? 'pass' : 'fail',
@@ -246,7 +252,7 @@ function evaluate(
     }
 
     case 'edit': {
-      const ok = !!(img?.b64_json || img?.image_format)
+      const ok = !!(img?.b64_json || img?.url)
       return { verdict: ok ? 'pass' : 'fail', detail: ok ? '编辑端点返回图片 ✓' : '未返回图片' }
     }
 
@@ -297,6 +303,13 @@ export const useApiTestStore = defineStore('apiTest', () => {
 
   function addLog(level: TestLogEntry['level'], text: string) {
     logs.value.push({ id: logSeq++, ts: nowTs(), level, text })
+  }
+
+  /** Request context for the body-shape checks in detectVendor: revised_prompt
+   *  is legitimate on dall-e-3, and a "revised" prompt equal to the one sent
+   *  is a gateway filling the field in. */
+  function vendorCtx(prompt: string) {
+    return { model: imageGen.config.model_id, prompt }
   }
 
   const passCount = computed(
@@ -392,11 +405,13 @@ export const useApiTestStore = defineStore('apiTest', () => {
 
         results.value[i].status = 'running'
         const caseT0 = performance.now()
+        // Built outside the try so the error branch can hand the prompt to the
+        // vendor check as well - a refusal body is evidence too.
+        const req: GenerateRequest = c.isEdit
+          ? { prompt: EDIT_PROMPT, ...c.req }
+          : { prompt: DEFAULT_PROMPT, quality: 'low', size: '1024x1024', ...c.req }
 
         try {
-          const req: GenerateRequest = c.isEdit
-            ? { prompt: EDIT_PROMPT, ...c.req }
-            : { prompt: DEFAULT_PROMPT, quality: 'low', size: '1024x1024', ...c.req }
           let res: GenerateResponse
 
           if (c.isEdit) {
@@ -412,6 +427,18 @@ export const useApiTestStore = defineStore('apiTest', () => {
 
           const elapsed = Math.round(performance.now() - caseT0)
           const imgData = res.images[0]
+
+          // How the bytes arrived, across every image of the response. The
+          // reference fixes GPT image models to b64_json, so this is evidence
+          // about the gateway and is kept per card rather than only in the log.
+          const kinds = Array.from(new Set(res.images.map(im => im.data_kind ?? 'none')))
+          const dataKind: TestResult['dataKind'] =
+            kinds.length > 1 ? 'mixed' : (kinds[0] as ImageDataKind | undefined) ?? 'none'
+
+          // Judged once, here, with the request context the body checks need.
+          const vendor = res.upstream
+            ? detectVendor(res.upstream, vendorCtx(req.prompt))
+            : undefined
 
           // Build blob URL
           let src: string | undefined
@@ -450,11 +477,16 @@ export const useApiTestStore = defineStore('apiTest', () => {
             outputTokens:  res.output_tokens ?? undefined,
             actualModel:   res.upstream_model ?? undefined,
             upstream:      res.upstream ?? undefined,
+            dataKind,
+            dataField:     imgData?.data_field ?? undefined,
+            sourceUrl:     imgData?.source_url ?? undefined,
+            fetchError:    imgData?.fetch_error ?? undefined,
+            vendor,
           } as Partial<TestResult>)
 
           const icon = verdict === 'pass' ? '✓' : verdict === 'fail' ? '✗' : '·'
           const lvl  = verdict === 'fail' ? 'error' : verdict === 'pass' ? 'ok' : 'info'
-          addLog(lvl, `${icon} ${c.label}  ${detail}  (${elapsed}ms)`)
+          addLog(lvl, `${icon} ${c.label}  ${detail}  · ${describeDataKind(results.value[i])}  (${elapsed}ms)`)
 
         } catch (e: any) {
           const elapsed = Math.round(performance.now() - caseT0)
@@ -478,6 +510,10 @@ export const useApiTestStore = defineStore('apiTest', () => {
             // Failures that got an HTTP response carry the raw exchange too —
             // what a refusal actually looks like on the wire is the finding.
             upstream:  e?.upstream ?? undefined,
+            // And the refusal body is origin evidence as well: Azure's
+            // contentFilter code, or a Codex bridge blaming the
+            // image_generation tool for n>1.
+            vendor:    e?.upstream ? detectVendor(e.upstream, vendorCtx(req.prompt)) : undefined,
           } as Partial<TestResult>)
 
           const label = is429 ? `⚡ ${c.label}  限流 429`
@@ -501,6 +537,7 @@ export const useApiTestStore = defineStore('apiTest', () => {
     // Who actually answered — judged from every captured raw exchange at once.
     // All probes hit the same configured baseurl, so agreement is expected and
     // a split is itself a finding (a gateway balancing across upstreams).
+    addLog('info', `返回数据形式: ${dataKindLine()}`)
     addLog('info', `来源判定: ${vendorLine()}`)
 
     const elapsed = Math.round(performance.now() - t0)
@@ -575,9 +612,24 @@ export const useApiTestStore = defineStore('apiTest', () => {
 
   /** One line naming the vendor behind the gateway, from all raw exchanges. */
   function vendorLine(): string {
-    return aggregateVendor(
-      results.value.map(r => r.upstream ? detectVendor(r.upstream) : null),
-    )
+    return aggregateVendor(results.value.map(r => r.vendor ?? null))
+  }
+
+  /** One line on how the image bytes arrived across the run. b64_json is the
+   *  only documented shape for GPT image models, so anything else is called
+   *  out as the gateway's own doing rather than left to look like a detail. */
+  function dataKindLine(): string {
+    const kinded = results.value.filter(r => r.dataKind)
+    if (!kinded.length) return '无图像返回'
+    const counts = new Map<string, number>()
+    for (const r of kinded) {
+      const k = describeDataKind(r)
+      counts.set(k, (counts.get(k) ?? 0) + 1)
+    }
+    const parts = Array.from(counts.entries()).map(([k, n]) => `${k} ${n} 次`).join(' · ')
+    return kinded.every(r => r.dataKind === 'b64_json')
+      ? `${parts}（符合官方规范：GPT image 仅返回 b64_json）`
+      : `${parts}（官方规范：GPT image 仅返回 b64_json，url / data:URL 是网关行为）`
   }
 
   function buildSummary(elapsedMs: number): string {
@@ -661,6 +713,10 @@ export const useApiTestStore = defineStore('apiTest', () => {
       lines.push('')
       lines.push(`■ 编辑端点（spring.jpg + "${EDIT_PROMPT}"）  ${edit.status === 'done' ? (edit.verdict === 'pass' ? '✓ 正常' : '✗ 异常') : '未完成'}`)
     }
+
+    // data kind — how the bytes arrived, which the reference fixes as b64_json
+    lines.push('')
+    lines.push(`■ 返回数据形式  ${dataKindLine()}`)
 
     // vendor — judged from the raw exchanges, evidence quoted
     lines.push('')

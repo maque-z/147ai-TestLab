@@ -51,13 +51,43 @@ export interface GenerateRequest {
   input_fidelity?: string
 }
 
+/** How the upstream delivered one image's bytes — see GeneratedImage.data_kind.
+ *  The reference fixes GPT image models to b64_json, so anything else here is
+ *  a finding about the gateway rather than about the model. */
+export type ImageDataKind = 'b64_json' | 'data_url' | 'url' | 'none'
+
 export interface GeneratedImage {
   b64_json?: string
+  /** Only when the upstream returned an http(s) link; a data: URL is unpacked
+   *  into b64_json by the backend instead of arriving twice. */
   url?: string
   revised_prompt?: string
-  /** Real format sniffed from magic bytes, not the API's claimed output_format. */
+  /** Real format sniffed from magic bytes, not the API's claimed output_format.
+   *  Absent when there were no bytes to sniff — never backfilled from the claim. */
   image_format?: string
   byte_size?: number
+  /** b64_json (documented) / data_url / url (downloaded server-side) / none. */
+  data_kind?: ImageDataKind
+  /** The wire field that carried it: b64_json, url, or result — the last being
+   *  a Responses API image_generation_call forwarded unconverted. */
+  data_field?: string
+  /** The link exactly as returned, when data_kind is url. */
+  source_url?: string
+  /** Why the link could not be downloaded, when it could not. */
+  fetch_error?: string
+}
+
+/** Who ultimately produced a response. `reverse` is a Codex / ChatGPT-web
+ *  reverse-engineered relay re-wrapping something that was never an Images API
+ *  call; utils/vendor.ts holds the fingerprints and where each one comes from. */
+export type VendorKind = 'openai' | 'azure' | 'reverse' | 'unknown'
+
+export interface VendorVerdict {
+  vendor: VendorKind
+  label: string
+  /** Matched signals, strongest first: origin evidence, then body-shape
+   *  context prefixed 形态, then relay traces prefixed 中转. */
+  evidence: string[]
 }
 
 /** The raw upstream HTTP exchange behind one card, for the observation modal.
@@ -266,6 +296,20 @@ export interface TestResult {
    *  Present for successes and for failures that got an HTTP response —
    *  the refusal probes are only readable through this. */
   upstream?: UpstreamSnapshot
+  /** How the bytes arrived. The reference fixes GPT image models to b64_json,
+   *  so url / data_url here is a gateway finding; `mixed` when a multi-image
+   *  response disagreed with itself. */
+  dataKind?: ImageDataKind | 'mixed'
+  /** Wire field that carried the first image (b64_json / url / result). */
+  dataField?: string
+  /** The link as returned, when dataKind is url. */
+  sourceUrl?: string
+  /** Why the backend could not download that link, when it could not. */
+  fetchError?: string
+  /** Origin verdict for this exchange, judged once when the result landed so
+   *  the card chip, the raw-response modal and the report quote the same
+   *  evidence. */
+  vendor?: VendorVerdict
 }
 
 export interface TestLogEntry {

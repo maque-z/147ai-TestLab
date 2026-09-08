@@ -1,7 +1,9 @@
 import base64
+import ipaddress
 import logging
 import re
 import time
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -198,35 +200,164 @@ async def call_upstream(
         raise HTTPException(status_code=502, detail=str(exc))
 
 
-def build_response(data: dict, *, cfg, prompt: str, payload: dict,
-                   elapsed_ms: int, request_id: str | None,
-                   upstream: UpstreamSnapshot | None = None) -> GenerateResponse:
-    """Shape one upstream response into the card the UI renders."""
+# --- Image bytes that arrive as a link ---------------------------------------
+# The reference is unambiguous for GPT image models: `b64_json` is "returned by
+# default" and `url` is "unsupported". A link therefore never comes from the
+# Images API itself -- it is a gateway re-hosting the file, or a ChatGPT-web relay
+# handing out its own download link (sub2api and AI-Zero-Token both resolve
+# chatgpt.com/backend-api/files/.../download and pass the result on). Either way
+# the bytes are still the thing to measure, so the link is fetched here and
+# inspected like any b64 payload; what *kind* of data arrived is recorded
+# separately, as evidence, in GeneratedImage.data_kind.
+
+_URL_FETCH_CAP = 50 * 1024 * 1024
+# Bounded independently of the generation timeout: a link download should take
+# seconds, and a 300s configured timeout should not become a 300s hang here.
+_URL_FETCH_TIMEOUT = 60.0
+
+
+def _blocked_host(host: str) -> bool:
+    """Refuse literal loopback / private / link-local targets.
+
+    The link is chosen by whoever answers the configured baseurl, and a fetch
+    made from inside the deployment must not be steerable at the network behind
+    it. Hostnames are left to resolve normally -- this is a guard against the
+    obvious, not a full SSRF filter.
+    """
+    if not host or host.lower() == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return False
+    return (ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_unspecified)
+
+
+async def _fetch_image_url(url: str, timeout: float) -> tuple[bytes | None, str | None]:
+    """GET an image link. Returns (bytes, None), or (None, reason) -- the reason
+    is shown on the card, so it is written for a reader."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return None, f"非 http(s) 链接（{parsed.scheme or '无协议'}）"
+    if _blocked_host(parsed.hostname or ""):
+        return None, "链接指向内网/本机地址，拒绝下载"
+    try:
+        async with httpx.AsyncClient(
+            timeout=min(timeout, _URL_FETCH_TIMEOUT), follow_redirects=True,
+        ) as client:
+            async with client.stream("GET", url) as resp:
+                if resp.status_code >= 400:
+                    return None, f"下载失败 HTTP {resp.status_code}"
+                buf = bytearray()
+                async for chunk in resp.aiter_bytes():
+                    buf += chunk
+                    if len(buf) > _URL_FETCH_CAP:
+                        return None, "文件超过 50 MB 上限"
+                return bytes(buf), None
+    except httpx.TimeoutException:
+        return None, "下载超时"
+    except Exception as exc:  # DNS, TLS, connection refused ...
+        return None, f"下载失败: {exc.__class__.__name__}"
+
+
+def _split_data_url(s: str) -> str | None:
+    """The base64 payload of a data:...;base64,... string, or None if not one."""
+    if not s.startswith("data:"):
+        return None
+    comma = s.find(",")
+    if comma == -1 or ";base64" not in s[:comma]:
+        return None
+    return s[comma + 1:]
+
+
+async def _build_image(item: dict, timeout: float) -> GeneratedImage:
+    """One data[] item -> one GeneratedImage, with the bytes measured whatever
+    container they arrived in.
+
+    The documented shape is `b64_json` holding raw base64. Everything else seen
+    in the wild is handled and *recorded*, never silently normalised away:
+    a data: URL in either field, an http(s) link (downloaded), or a `result`
+    field -- the name inside a Responses API image_generation_call, which a
+    gateway forwarding that item unconverted would leave as-is.
+    """
+    b64 = item.get("b64_json")
+    url = item.get("url")
+    result = item.get("result")
+
+    kind, field = "none", None
+    b64_out: str | None = None
+    source_url: str | None = None
+    fetch_error: str | None = None
+    raw: bytes | None = None
+
+    if isinstance(b64, str) and b64:
+        field = "b64_json"
+        payload = _split_data_url(b64)
+        kind, b64_out = ("data_url", payload) if payload is not None else ("b64_json", b64)
+    elif isinstance(url, str) and url:
+        field = "url"
+        payload = _split_data_url(url)
+        if payload is not None:
+            kind, b64_out = "data_url", payload
+        else:
+            kind, source_url = "url", url
+            raw, fetch_error = await _fetch_image_url(url, timeout)
+            if raw is not None:
+                b64_out = base64.b64encode(raw).decode("ascii")
+    elif isinstance(result, str) and result:
+        field, kind, b64_out = "result", "b64_json", result
+
+    real_format = None
+    byte_size = None
+    if raw is not None:
+        byte_size = len(raw)
+        real_format = detect_format(raw[:16])
+    elif b64_out:
+        byte_size = b64_byte_size(b64_out)
+        # 24 base64 chars decode to 18 bytes -- enough for every signature
+        # detect_format knows.
+        try:
+            real_format = detect_format(base64.b64decode(b64_out[:24]))
+        except Exception:
+            real_format = None
+
+    revised = item.get("revised_prompt")
+    return GeneratedImage(
+        b64_json=b64_out,
+        url=source_url,
+        revised_prompt=revised if isinstance(revised, str) else None,
+        # Sniffed only. The old fallback to the declared output_format made a
+        # claim look like a measurement whenever the bytes were missing.
+        image_format=real_format,
+        byte_size=byte_size,
+        data_kind=kind,
+        data_field=field,
+        source_url=source_url,
+        fetch_error=fetch_error,
+    )
+
+
+async def build_response(data: dict, *, cfg, prompt: str, payload: dict,
+                         elapsed_ms: int, request_id: str | None,
+                         upstream: UpstreamSnapshot | None = None) -> GenerateResponse:
+    """Shape one upstream response into the card the UI renders.
+
+    Async because an item that arrives as a link is downloaded here, so its
+    bytes can be measured like everyone else's.
+    """
     declared_format = data.get("output_format")
     usage = data.get("usage") or {}
     # gpt-image reports how the input tokens split between the prompt text and
     # any reference images, under usage.input_tokens_details.
     in_details = usage.get("input_tokens_details") or {}
 
-    images: list[GeneratedImage] = []
-    for item in data.get("data", []):
-        b64 = item.get("b64_json")
-        real_format = None
-        byte_size = None
-        if b64:
-            byte_size = b64_byte_size(b64)
-            # 24 base64 chars decode to 18 bytes — enough for every signature above
-            try:
-                real_format = detect_format(base64.b64decode(b64[:24]))
-            except Exception:
-                real_format = None
-        images.append(GeneratedImage(
-            b64_json=b64,
-            url=item.get("url"),
-            revised_prompt=item.get("revised_prompt"),
-            image_format=real_format or declared_format,
-            byte_size=byte_size,
-        ))
+    items = data.get("data")
+    images: list[GeneratedImage] = [
+        await _build_image(item, cfg.timeout)
+        for item in (items if isinstance(items, list) else [])
+        if isinstance(item, dict)
+    ]
 
     return GenerateResponse(
         images=images,
@@ -338,7 +469,7 @@ async def generate(
             cfg, "/v1/images/generations", json=payload
         )
 
-        return build_response(data, cfg=cfg, prompt=body.prompt, payload=payload,
+        return await build_response(data, cfg=cfg, prompt=body.prompt, payload=payload,
                               elapsed_ms=elapsed_ms, request_id=request_id,
                               upstream=snap)
 
@@ -471,7 +602,7 @@ async def edit(
         data, elapsed_ms, request_id, snap = await call_upstream(
             cfg, "/v1/images/edits", data=form, files=files
         )
-        return build_response(data, cfg=cfg, prompt=prompt, payload=payload,
+        return await build_response(data, cfg=cfg, prompt=prompt, payload=payload,
                               elapsed_ms=elapsed_ms, request_id=request_id,
                               upstream=snap)
 

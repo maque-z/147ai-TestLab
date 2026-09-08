@@ -118,6 +118,13 @@
               <span v-else-if="result.verdict === 'ratelimit'" class="status-dot rl">⚡</span>
               <span v-else                                   class="status-dot info">·</span>
               <span class="card-label">{{ result.case.label }}</span>
+              <!-- Origin of this one exchange; the full evidence list sits in
+                   the tooltip and in the raw-response modal. -->
+              <span
+                v-if="result.vendor"
+                :class="['vendor-chip', `k-${result.vendor.vendor}`]"
+                :title="result.vendor.label + '\n' + result.vendor.evidence.join('\n')"
+              >{{ VENDOR_SHORT[result.vendor.vendor] }}</span>
               <!-- Raw exchange viewer. Present on errors too — the refusal
                    probes are only readable through this. -->
               <button
@@ -137,11 +144,6 @@
                 class="card-img"
                 @load="onImgLoad(result, $event)"
               />
-              <!-- Only the first image is rendered, so the count has to be stated
-                   or a request that returned 2 would look identical to one. -->
-              <span v-if="(result.imageCount ?? 0) > 1" class="img-count-badge">
-                {{ result.imageCount }} 张
-              </span>
               <div v-else-if="result.status === 'running'" class="card-img-ph loading">
                 <n-spin :size="18" />
               </div>
@@ -149,6 +151,21 @@
                 <span class="err-icon">✗</span>
               </div>
               <div v-else class="card-img-ph" />
+              <!-- Overlays, kept out of the placeholder chain above: with the
+                   count badge heading that chain, every single-image card also
+                   rendered an empty placeholder beside its thumbnail. -->
+              <!-- Only the first image is rendered, so the count has to be stated
+                   or a request that returned 2 would look identical to one. -->
+              <span v-if="(result.imageCount ?? 0) > 1" class="img-count-badge">
+                {{ result.imageCount }} 张
+              </span>
+              <!-- How the bytes arrived. The reference fixes GPT image models to
+                   b64_json, so url / data:URL here is a finding about the gateway. -->
+              <span
+                v-if="result.dataKind"
+                :class="['kind-badge', { off: result.dataKind !== 'b64_json' }]"
+                :title="kindTitle(result)"
+              >{{ DATA_KIND_LABEL[result.dataKind ?? 'none'] }}</span>
             </div>
 
             <!-- Detail line -->
@@ -166,6 +183,8 @@
       v-model:show="rawShow"
       :title="rawResult?.case.label ?? ''"
       :snapshot="rawResult?.upstream ?? null"
+      :verdict="rawResult?.vendor ?? null"
+      :data-kind="rawResult?.dataKind ? describeDataKind(rawResult) : ''"
     />
   </div>
 </template>
@@ -176,6 +195,7 @@ import { NSpin } from 'naive-ui'
 import { useApiTestStore, TEST_CASE_COUNT, CONCURRENCY, DIMENSION_OPTIONS } from '@/stores/apiTest'
 import { useImageGenStore } from '@/stores/imageGen'
 import RawResponseViewer from './RawResponseViewer.vue'
+import { VENDOR_SHORT, DATA_KIND_LABEL, describeDataKind } from '@/utils/vendor'
 import type { TestResult } from '@/types'
 
 const store     = useApiTestStore()
@@ -194,6 +214,22 @@ const rawResult = ref<TestResult | null>(null)
 function openRaw(result: TestResult) {
   rawResult.value = result
   rawShow.value = true
+}
+
+/** Tooltip for the data-kind badge: what arrived, from where, and whether the
+ *  bytes could be measured at all. */
+function kindTitle(r: TestResult): string {
+  const lines = [`返回数据形式: ${describeDataKind(r)}`]
+  if (r.dataField && r.dataField !== r.dataKind) lines.push(`承载字段: ${r.dataField}`)
+  if (r.dataKind === 'url') {
+    if (r.sourceUrl) lines.push(`链接: ${r.sourceUrl}`)
+    lines.push(r.fetchError
+      ? `服务端下载失败（${r.fetchError}），格式 / 大小 / 透明度不可测`
+      : '服务端已下载，格式 / 大小按字节测量')
+  }
+  if (r.dataKind === 'b64_json') lines.push('符合官方规范：GPT image 模型仅返回 b64_json')
+  else if (r.dataKind !== 'none') lines.push('官方规范：GPT image 模型仅返回 b64_json — 这是网关自己的行为')
+  return lines.join('\n')
 }
 
 const allSelected = computed(() => store.selectedDims.length === DIMENSION_OPTIONS.length)
@@ -492,6 +528,39 @@ async function copySummary() {
   color: #5A89C8;
   background: rgba(90, 137, 200, 0.14);
 }
+
+/* Origin chip: who answered this one request. Colours match the modal badge. */
+.vendor-chip {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  padding: 0 5px;
+  border-radius: 5px;
+  white-space: nowrap;
+  cursor: help;
+}
+.vendor-chip.k-openai  { color: #2E9B5E; background: rgba(46, 155, 94, 0.14); }
+.vendor-chip.k-azure   { color: #3D7CC9; background: rgba(61, 124, 201, 0.14); }
+.vendor-chip.k-reverse { color: #B8791C; background: rgba(184, 121, 28, 0.16); }
+.vendor-chip.k-unknown { color: var(--text-muted); background: rgba(139, 147, 163, 0.14); }
+
+/* Data-kind badge: bottom-left of the thumbnail, opposite the count badge.
+   Muted for the documented b64_json case, amber for anything else. */
+.kind-badge {
+  position: absolute;
+  left: 5px;
+  bottom: 5px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(22, 24, 29, 0.66);
+  color: #C8D0DC;
+  font-family: 'Consolas', 'Menlo', 'Monaco', monospace;
+  font-size: 9.5px;
+  font-weight: 700;
+  cursor: help;
+}
+.kind-badge.off { color: #FFD27A; background: rgba(120, 78, 0, 0.78); }
 
 /* Count badge sits over the thumbnail; the wrapper is its containing block. */
 .img-count-badge {

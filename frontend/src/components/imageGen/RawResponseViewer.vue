@@ -13,11 +13,17 @@
           </button>
           <button class="raw-btn close" title="关闭 ( Esc )" @click="close">×</button>
         </div>
-        <!-- Who actually answered, judged from the headers/body below. The
-             evidence is quoted so the verdict can always be second-guessed. -->
-        <div v-if="verdict" class="raw-vendor">
-          <span :class="['vendor-badge', `k-${verdict.vendor}`]">{{ verdict.label }}</span>
-          <span class="vendor-evidence">{{ verdict.evidence.join(' · ') }}</span>
+        <!-- Who actually answered, judged from the headers/body below, and how
+             the image bytes arrived. The evidence is quoted so the verdict can
+             always be second-guessed against the transcript underneath. -->
+        <div v-if="verdict || dataKind" class="raw-vendor">
+          <span v-if="verdict" :class="['vendor-badge', `k-${verdict.vendor}`]">{{ verdict.label }}</span>
+          <span
+            v-if="dataKind"
+            class="kind-chip"
+            title="返回数据形式（官方规范：GPT image 模型仅返回 b64_json）"
+          >{{ dataKind }}</span>
+          <span v-if="verdict" class="vendor-evidence">{{ verdict.evidence.join(' · ') }}</span>
         </div>
         <!-- One merged transcript: status line, every header, blank line, body.
              Reads like the wire format so it can be pasted into a report as-is. -->
@@ -30,14 +36,18 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { NModal } from 'naive-ui'
-import { detectVendor } from '@/utils/vendor'
-import type { UpstreamSnapshot } from '@/types'
+import type { UpstreamSnapshot, VendorVerdict } from '@/types'
 
 const props = defineProps<{
   show: boolean
   /** Card label, so the transcript says which probe it belongs to. */
   title: string
   snapshot: UpstreamSnapshot | null
+  /** Judged by the store when the result landed — the same verdict the card
+   *  chip and the report use, so the three can never disagree. */
+  verdict?: VendorVerdict | null
+  /** How the image bytes arrived (b64_json / data:URL / url→host). */
+  dataKind?: string
 }>()
 const emit = defineEmits<{
   (e: 'update:show', v: boolean): void
@@ -46,8 +56,6 @@ const emit = defineEmits<{
 const copied = ref(false)
 
 const statusOk = computed(() => (props.snapshot?.status ?? 0) < 400)
-
-const verdict = computed(() => props.snapshot ? detectVendor(props.snapshot) : null)
 
 const rawText = computed(() => {
   const s = props.snapshot
@@ -185,7 +193,18 @@ async function copyRaw() {
 }
 .vendor-badge.k-openai  { color: #4DC98C; background: rgba(77, 201, 140, 0.12); }
 .vendor-badge.k-azure   { color: #5A9BD5; background: rgba(90, 155, 213, 0.14); }
+.vendor-badge.k-reverse { color: #E5A43A; background: rgba(229, 164, 58, 0.14); }
 .vendor-badge.k-unknown { color: #8B93A3; background: rgba(139, 147, 163, 0.13); }
+
+.kind-chip {
+  flex-shrink: 0;
+  font-family: 'Consolas', 'Menlo', 'Monaco', monospace;
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  color: #A8B0BD;
+  background: rgba(168, 176, 189, 0.12);
+}
 
 .vendor-evidence {
   font-family: 'Consolas', 'Menlo', 'Monaco', monospace;
