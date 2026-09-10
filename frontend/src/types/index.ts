@@ -26,15 +26,33 @@ export interface ImageConfig {
   user_id?: number
   baseurl: string
   api_key: string
+  /** Legacy single model. Empty on accounts created after the model moved into
+   *  the parameter panel; the backend seeds selected_models from it once. */
   model_id: string
+  /** The models ticked in the parameter panel, saved per account. */
+  selected_models: string[]
+  /** Model ids the user added by hand, saved per account. */
+  custom_models: string[]
   timeout: number
   updated_at?: string
+}
+
+/** One chip in the panel's model list: a documented model with its doc note, or
+ *  a hand-added id — the only kind that can be removed. */
+export interface ModelOption {
+  id: string
+  note: string
+  custom: boolean
 }
 
 /** Every param is optional: omitted means "let the API apply its own default",
  *  which is a distinct case from any value the user could pick. */
 export interface GenerateRequest {
   prompt: string
+  /** The model for this request — the one param with no "let the API decide":
+   *  a request without one falls back to a model that no longer exists. The
+   *  backend substitutes the account's saved selection when absent. */
+  model_id?: string
   size?: string
   quality?: string
   n?: number
@@ -135,6 +153,9 @@ export interface GenerateResponse {
  *  An empty array means the param is left unset, which contributes exactly one
  *  (default) row to the cross product rather than zero. */
 export interface ParamMatrix {
+  /** Never empty: the model is required, so this group cannot mean "unset".
+   *  Each entry is one request per combination — the batch's model comparison. */
+  models: string[]
   sizes: string[]
   qualities: string[]
   formats: string[]
@@ -268,6 +289,10 @@ export interface TestCase {
 export type TestVerdict = 'pass' | 'fail' | 'info' | 'ratelimit'
 
 export interface TestResult {
+  /** `${model}|${case.id}` — unique across a run that repeats every case per model. */
+  key: string
+  /** The model this probe was sent to. */
+  model: string
   case: TestCase
   status: JobStatus
   verdict?: TestVerdict

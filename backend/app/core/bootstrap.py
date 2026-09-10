@@ -6,6 +6,7 @@ account once, and never touches it afterwards — a password changed later is no
 reset by a restart.
 """
 
+import json
 import logging
 
 from sqlalchemy import text
@@ -35,7 +36,10 @@ def ensure_schema() -> None:
     for table in ("user_image_configs", "user_banana_configs"):
         _ensure_unique_user_id(table)
 
-    _ensure_banana_config_columns()
+    # Order matters here too: the seed writes selected_models, so the column has
+    # to exist first.
+    _ensure_json_list_columns()
+    _seed_image_model_selection()
 
     # Order matters: _promote_default_admin writes is_admin, so the column has
     # to exist first.
@@ -43,28 +47,92 @@ def ensure_schema() -> None:
     _promote_default_admin()
 
 
-def _ensure_banana_config_columns() -> None:
-    """Backfill columns added to the Gemini configuration table.
+# JSON-list columns added after their tables first shipped. SQLite stores the
+# JSON type as TEXT, and '[]' is exactly what SQLAlchemy writes for an empty
+# list, so the migration default reads back as one.
+_JSON_LIST_COLUMNS = {
+    "user_banana_configs": ("custom_models",),
+    "user_image_configs": ("selected_models", "custom_models"),
+}
 
-    SQLite's create_all does not alter an existing table. The JSON list is stored
-    as text by SQLite, with an empty list as the migration default.
+
+def _ensure_json_list_columns() -> None:
+    """Backfill the JSON-list columns on the per-user config tables.
+
+    create_all does not alter an existing table, so a column added to a model
+    after a database was created exists on fresh databases only without this.
+    Idempotent: PRAGMA table_info makes it a no-op once the column is there.
+    """
+    with engine.begin() as conn:
+        for table, columns in _JSON_LIST_COLUMNS.items():
+            if not conn.exec_driver_sql(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).first():
+                continue  # fresh database; create_all built it with the columns
+            existing = {
+                row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")
+            }
+            for name in columns:
+                if name in existing:
+                    continue
+                # `table` and `name` are module constants, never user input.
+                # Identifiers cannot be bound parameters, so interpolation is
+                # the only option — and is safe here.
+                conn.exec_driver_sql(
+                    f"ALTER TABLE {table} ADD COLUMN {name} TEXT NOT NULL DEFAULT '[]'"
+                )
+                logger.info("Added column %s.%s.", table, name)
+
+
+def _seed_image_model_selection() -> None:
+    """Carry each account's legacy single model_id into its model selection.
+
+    Before the model moved into the parameter panel every account had exactly
+    one model_id, and the column default was gpt-image-2, so every row from that
+    era has one. Those rows also have an empty selection, and the panel would
+    open on this build's default model — silently changing what the account had
+    been testing. Seeding the selection from model_id keeps it continuous.
+
+    The id goes into custom_models as well, so a gateway alias saved back then
+    stays selectable after being unticked. A documented id landing there too is
+    harmless: the frontend offers each id once and drops the duplicate on its
+    next save.
+
+    Idempotent: only rows with an empty selection and a non-empty model_id are
+    touched, and rows created from now on leave model_id empty (models/user.py),
+    so a new account that has simply never touched the panel is never mistaken
+    for a legacy one.
     """
     with engine.begin() as conn:
         if not conn.exec_driver_sql(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_banana_configs'"
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_image_configs'"
         ).first():
             return
-        existing = {
-            row[1] for row in conn.exec_driver_sql(
-                "PRAGMA table_info(user_banana_configs)"
-            )
-        }
-        if "custom_models" not in existing:
+
+        rows = conn.exec_driver_sql(
+            "SELECT id, model_id, custom_models FROM user_image_configs "
+            "WHERE model_id IS NOT NULL AND TRIM(model_id) != '' "
+            "AND (selected_models IS NULL OR selected_models IN ('', '[]'))"
+        ).all()
+        for row_id, model_id, custom_raw in rows:
+            model = model_id.strip()
+            try:
+                custom = json.loads(custom_raw or "[]")
+            except ValueError:
+                custom = []
+            if not isinstance(custom, list):
+                custom = []
+            if model not in custom:
+                custom.append(model)
             conn.exec_driver_sql(
-                "ALTER TABLE user_banana_configs "
-                "ADD COLUMN custom_models TEXT NOT NULL DEFAULT '[]'"
+                "UPDATE user_image_configs SET selected_models = ?, custom_models = ? "
+                "WHERE id = ?",
+                (json.dumps([model]), json.dumps(custom), row_id),
             )
-            logger.info("Added column user_banana_configs.custom_models.")
+        if rows:
+            logger.info(
+                "Seeded the model selection from model_id on %d account(s).", len(rows)
+            )
 
 
 def _ensure_unique_user_id(table: str) -> None:

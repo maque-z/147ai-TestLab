@@ -5,7 +5,10 @@ export function getConfig(): Promise<ImageConfig> {
   return http.get<ImageConfig>('/image-gen/config').then(r => r.data)
 }
 
-export function saveConfig(cfg: ImageConfig): Promise<ImageConfig> {
+/** Partial on purpose: the backend applies only the fields it is sent. The
+ *  drawer writes the connection fields and the parameter panel writes the model
+ *  lists, and neither can clobber the other's half with a stale copy. */
+export function saveConfig(cfg: Partial<ImageConfig>): Promise<ImageConfig> {
   return http.put<ImageConfig>('/image-gen/config', cfg).then(r => r.data)
 }
 
@@ -36,6 +39,7 @@ export function edit(
   const fd = new FormData()
   fd.append('prompt', req.prompt)
   // Unset params are simply absent, matching the JSON path's "let the API decide".
+  if (req.model_id) fd.append('model_id', req.model_id)
   if (req.size) fd.append('size', req.size)
   if (req.quality) fd.append('quality', req.quality)
   if (req.n != null) fd.append('n', String(req.n))

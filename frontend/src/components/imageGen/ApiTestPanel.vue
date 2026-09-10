@@ -6,8 +6,14 @@
       <div class="header-left">
         <span class="test-title">API 参数兼容性测试</span>
         <span class="test-meta">
-          {{ store.selectedCount }}/{{ TEST_CASE_COUNT }} 个探测 · 并发 {{ CONCURRENCY }} · spring.jpg 参考图
+          {{ store.selectedCount }}/{{ TEST_CASE_COUNT }} 项探测 × {{ store.models.length }} 个模型 = {{ store.plannedCount }} 次请求 · 并发 {{ CONCURRENCY }} · spring.jpg 参考图
           <span class="build-tag" title="前端构建版本（commit · 构建时间 UTC）">前端构建 {{ BUILD }}</span>
+        </span>
+        <!-- The models come from the parameter panel, which this pane hides, so
+             they are named here — otherwise the run's most important input would
+             be invisible from the button that starts it. -->
+        <span class="test-models" title="在「生成 / 编辑」页的参数面板中勾选模型；每个模型各跑一遍全部探测">
+          模型: <code v-for="m in store.models" :key="m">{{ m }}</code>
         </span>
       </div>
       <div class="header-right">
@@ -18,7 +24,7 @@
           v-if="!store.running"
           class="btn btn-primary"
           :disabled="!!blockReason"
-          :title="blockReason || `并发发射勾选的探测，约消耗 ${store.selectedCount} 次生图额度`"
+          :title="blockReason || `并发发射勾选的探测，约消耗 ${store.plannedCount} 次生图额度`"
           @click="store.run()"
         >
           ▶ 开始测试
@@ -105,7 +111,7 @@
         <div ref="gridEl" class="results-grid">
           <div
             v-for="result in store.results"
-            :key="result.case.id"
+            :key="result.key"
             :class="['test-card', `status-${result.status}`, result.verdict ? `v-${result.verdict}` : '']"
             @click="result.src && openPreview(result)"
           >
@@ -118,6 +124,13 @@
               <span v-else-if="result.verdict === 'ratelimit'" class="status-dot rl">⚡</span>
               <span v-else                                   class="status-dot info">·</span>
               <span class="card-label">{{ result.case.label }}</span>
+              <!-- Which model this probe went to — only when the run compared
+                   more than one, since otherwise every card would say the same. -->
+              <span
+                v-if="multiModel"
+                class="model-tag"
+                :title="result.model"
+              >{{ shortModel(result.model) }}</span>
               <!-- Origin of this one exchange; the full evidence list sits in
                    the tooltip and in the raw-response modal. -->
               <span
@@ -181,7 +194,7 @@
     <!-- Raw response transcript for the card whose {} was clicked -->
     <RawResponseViewer
       v-model:show="rawShow"
-      :title="rawResult?.case.label ?? ''"
+      :title="rawResult ? `${rawResult.model} · ${rawResult.case.label}` : ''"
       :snapshot="rawResult?.upstream ?? null"
       :verdict="rawResult?.vendor ?? null"
       :data-kind="rawResult?.dataKind ? describeDataKind(rawResult) : ''"
@@ -233,6 +246,16 @@ function kindTitle(r: TestResult): string {
 }
 
 const allSelected = computed(() => store.selectedDims.length === DIMENSION_OPTIONS.length)
+
+/** Whether the results on screen span more than one model. From the results,
+ *  not the live selection — the panel may have been changed since the run. */
+const multiModel = computed(() => new Set(store.results.map(r => r.model)).size > 1)
+
+/** The family prefix is the same on every documented id, so it is dropped to
+ *  keep the tag short: gpt-image-2.5-flare → 2.5-flare. A custom id shows whole. */
+function shortModel(id: string) {
+  return id.replace(/^gpt-image-/, '')
+}
 
 function toggleAll() {
   store.selectedDims = allSelected.value ? [] : DIMENSION_OPTIONS.map(o => o.key)
@@ -303,6 +326,16 @@ async function copySummary() {
 .header-left { display: flex; flex-direction: column; gap: 2px; }
 .test-title  { font-weight: 700; font-size: 13px; color: var(--text-primary); }
 .test-meta   { font-size: 11px; color: var(--text-muted); }
+.test-models { font-size: 11px; color: var(--text-muted); cursor: help; }
+.test-models code {
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(139, 147, 163, 0.14);
+  color: var(--text-primary);
+  font-family: 'Consolas', 'Menlo', 'Monaco', monospace;
+  font-size: 10px;
+}
 
 .build-tag {
   margin-left: 8px;
@@ -508,6 +541,25 @@ async function copySummary() {
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1;
+}
+
+/* Which model a card belongs to, in a multi-model run. Monospace like the raw
+   button so it reads as an identifier, not a verdict. */
+.model-tag {
+  flex-shrink: 0;
+  max-width: 96px;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: rgba(139, 147, 163, 0.16);
+  color: var(--text-muted);
+  font-family: 'Consolas', 'Menlo', 'Monaco', monospace;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: help;
 }
 
 /* Opens the raw-response transcript. Monospace braces so it reads as "JSON". */

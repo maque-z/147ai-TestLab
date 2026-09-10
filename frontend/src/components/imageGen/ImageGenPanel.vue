@@ -36,7 +36,7 @@
             {{ shownRequests }} 请求 / {{ shownImages }} 图
           </span>
           <span v-else class="count-badge nm-inset">
-            {{ TEST_CASE_COUNT }} 探测 / 并发 {{ CONCURRENCY }}
+            {{ apiTest.plannedCount }} 探测 / 并发 {{ CONCURRENCY }}
           </span>
         </div>
 
@@ -122,6 +122,64 @@
           />
         </div>
 
+        <!-- Models. Required, unlike every group below: the Images API has no
+             "let the API decide" for this one — a request without a model falls
+             back to a model that no longer exists. Several ticked means one
+             request per model on identical params, side by side in the batch,
+             which is how two models behind one gateway get compared. Ticks and
+             hand-added ids are saved to the account as they change. -->
+        <div class="field">
+          <div class="field-label">
+            模型
+            <span class="text-muted" style="font-weight:400">
+              已选 {{ store.matrix.models.length }} / {{ store.availableModels.length }}
+              <template v-if="store.matrix.models.length > 1"> · 每个模型一个请求，并发发出</template>
+            </span>
+            <span class="spacer" />
+            <span
+              v-if="store.modelSaveError"
+              class="save-err"
+              :title="`选择未能保存到账号：${store.modelSaveError}`"
+            >⚠ 未保存</span>
+            <button class="btn btn-xs" @click="store.selectAllModels()">全选</button>
+          </div>
+          <div class="chips models">
+            <button
+              v-for="m in store.availableModels" :key="m.id"
+              class="chip model-chip" :class="{ on: store.matrix.models.includes(m.id) }"
+              :title="m.note"
+              @click="store.toggleModel(m.id)"
+            >
+              <span class="model-id">{{ m.id }}</span>
+              <span class="chip-note">{{ m.note }}</span>
+              <!-- Only hand-added ids can be removed; the documented list is the
+                   documented list. Stopped so it does not also toggle the chip. -->
+              <span
+                v-if="m.custom"
+                class="chip-remove"
+                role="button"
+                :title="`从账号中移除 ${m.id}`"
+                @click.stop="store.removeCustomModel(m.id)"
+              >×</span>
+            </button>
+          </div>
+          <!-- Anything the list lacks: gpt-image-1.5, a snapshot the docs have
+               not listed yet, a gateway's house alias. Sent verbatim. -->
+          <div class="custom-size">
+            <n-input
+              v-model:value="customModel"
+              placeholder="自定义模型 ID，如 gpt-image-1.5 或网关别名"
+              size="small"
+              style="max-width:300px"
+              @keyup.enter="addCustomModel"
+            />
+            <button class="btn btn-xs" :disabled="!customModel.trim()" @click="addCustomModel">
+              添加
+            </button>
+            <span v-if="customModelHint" class="text-muted custom-hint">{{ customModelHint }}</span>
+          </div>
+        </div>
+
         <!-- Size matrix -->
         <div class="field">
           <div class="field-label">
@@ -172,8 +230,8 @@
           </table>
           </div><!-- /.size-table-scroll -->
 
-          <!-- gpt-image-2 takes an arbitrary WxH, not just the 30 recommended
-               pairs, so the table alone cannot reach the new behaviour. -->
+          <!-- gpt-image-2 and the 2.5 models take an arbitrary WxH, not just the
+               recommended pairs, so the table alone cannot reach that behaviour. -->
           <div class="custom-size">
             <n-input
               v-model:value="customSize"
@@ -203,16 +261,17 @@
                 >!</button>
               </template>
               <div class="hint-pop">
-                <div class="hint-title">gpt-image-2 自定义尺寸条件</div>
+                <div class="hint-title">GPT Image 自定义尺寸条件</div>
                 <ul class="hint-list">
                   <li>格式 <code>宽x高</code>，如 <code>1600x900</code></li>
                   <li>宽、高均为 <b>16 的倍数</b></li>
                   <li>宽高比在 <b>1:3 ~ 3:1</b> 之间</li>
-                  <li>最大 <b>3840×2160</b></li>
+                  <li>单边不超过 <b>3840</b> 像素</li>
+                  <li>总像素在 <b>655,360</b>（1024×640）~ <b>8,294,400</b>（3840×2160）之间</li>
                   <li>超过 2560×1440 官方标注为<b>实验性</b></li>
                 </ul>
                 <div class="hint-foot">
-                  不满足也能添加并发出 —— 本工具就是用来看 API 实际怎么反应的。
+                  文档对 gpt-image-2 与 gpt-image-2.5 给出同一套条件。不满足也能添加并发出 —— 本工具就是用来看 API 实际怎么反应的。
                 </div>
               </div>
             </n-popover>
@@ -244,6 +303,7 @@
               <button
                 v-for="o in QUALITIES" :key="o"
                 class="chip" :class="{ on: store.matrix.qualities.includes(o) }"
+                :title="EXTENDED_QUALITY.has(o) ? 'gpt-image-2.5 新增档位；早期模型的文档只到 high，照发以观察 API 反应' : undefined"
                 @click="toggle(store.matrix.qualities, o)"
               >{{ o }}</button>
             </div>
@@ -318,6 +378,14 @@
         <p v-if="transparentJpeg" class="warn-line">
           ⚠ 已同时选中 <code>transparent</code> 与 <code>jpeg</code>：jpeg 没有 alpha
           通道，承载不了透明。这些组合仍会照常发出 —— 就是要看 API 是报错还是悄悄返回不透明图。
+        </p>
+
+        <!-- Same treatment for the two quality tiers gpt-image-2.5 added: the
+             guide says earlier models stop at high, so pairing xhigh/max with
+             one of those is a probe — refuse, or quietly clamp? -->
+        <p v-if="extendedQualityOldModels.length" class="warn-line">
+          ⚠ 已选中 <code>xhigh</code> / <code>max</code>（gpt-image-2.5 新增档位），而
+          {{ extendedQualityOldModels.join('、') }} 的文档只到 <code>high</code>。这些组合仍会照常发出 —— 就是要看 API 是拒绝还是悄悄降档。
         </p>
 
         <!-- Numeric params -->
@@ -512,7 +580,11 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { NInput, NInputNumber, NModal, NPopover, NSpin } from 'naive-ui'
 import { useImageGenStore } from '@/stores/imageGen'
-import { TEST_CASE_COUNT, CONCURRENCY } from '@/stores/apiTest'
+import { useApiTestStore, CONCURRENCY } from '@/stores/apiTest'
+import {
+  EXTENDED_QUALITY, QUALITY_TIERS, isExperimentalSize, modelMismatch, sizeViolations,
+  supportsExtendedQuality,
+} from '@/utils/gptImageSpec'
 import { enterCards, fadeInUp, pulse, countTo } from '@/utils/motion'
 import RefImages from './RefImages.vue'
 import MaskEditor from './MaskEditor.vue'
@@ -524,6 +596,9 @@ import type { GenMode, ImageJob, JobImage } from '@/types'
 /** Prompt, matrix, mode and the uploads all live in the store: the run button
  *  sits in the top bar, in a different component tree, and needs the same state. */
 const store = useImageGenStore()
+/** Only for the header badge on the test pane: how many requests the suite
+ *  would send, which now depends on how many models are ticked. */
+const apiTest = useApiTestStore()
 
 /** Jobs for whichever endpoint tab is active. The two pools are separate so
  *  switching tabs never loses the other side's results. */
@@ -627,7 +702,9 @@ const ALL_SIZES = SIZE_TABLE.flatMap(r => r.sizes)
  *  The background group exists at all because the 2026-08-20 changelog put
  *  transparency in preview for gpt-image-2; before that the model refused it.
  */
-const QUALITIES   = ['low', 'medium', 'high']
+/** All five tiers. xhigh and max are gpt-image-2.5's; on an older model they are
+ *  sent anyway and flagged — see extendedQualityOldModels. */
+const QUALITIES: readonly string[] = QUALITY_TIERS
 const FORMATS     = ['png', 'jpeg', 'webp']
 const MODERATIONS = ['low']
 const BACKGROUNDS = ['transparent', 'opaque']
@@ -655,19 +732,36 @@ const transparentJpeg = computed(() =>
   store.matrix.backgrounds.includes('transparent') && store.matrix.formats.includes('jpeg')
 )
 
+/** Ticked models whose docs stop at high, while xhigh or max is also ticked.
+ *  Sent anyway and flagged, like transparent+jpeg: whether the API refuses or
+ *  quietly clamps is the finding. A custom id is left out — nothing is
+ *  documented for it, so nothing is expected of it. */
+const extendedQualityOldModels = computed(() =>
+  store.matrix.qualities.some(q => EXTENDED_QUALITY.has(q))
+    ? store.matrix.models.filter(m => supportsExtendedQuality(m) === false)
+    : []
+)
+
+// ---- Custom model entry ----
+
+const customModel = ref('')
+/** The store's reason for refusing the last entry, or empty. Cleared as soon as
+ *  the text changes so a fixed typo does not keep wearing the old complaint. */
+const customModelHint = ref('')
+watch(customModel, () => { customModelHint.value = '' })
+
+function addCustomModel() {
+  const err = store.addCustomModel(customModel.value)
+  customModelHint.value = err
+  if (!err) customModel.value = ''
+}
+
 // ---- Custom size entry ----
 
 const customSize = ref('')
 /** Hover and click both open the rules popover: hover is the fast path on a
  *  desktop, and click is the only one that works on a touch screen. */
 const hintOpen = ref(false)
-
-/** Documented bounds for gpt-image-2: each side divisible by 16, aspect ratio
- *  within 1:3–3:1, max 3840×2160, and anything above 2560×1440 flagged
- *  experimental. Violations are reported but not blocked — an out-of-spec size is
- *  a probe, exactly like n=50 elsewhere. */
-const MAX_PIXELS = 3840 * 2160
-const EXPERIMENTAL_PIXELS = 2560 * 1440
 
 const parsedCustom = computed(() => {
   const m = customSize.value.trim().match(/^(\d+)\s*[x×]\s*(\d+)$/i)
@@ -689,15 +783,14 @@ const customSizeHint = computed(() => {
   if (!p) return '格式应为 宽x高，如 1600x900'
   if (store.matrix.sizes.includes(p.key)) return '已在列表中'
 
-  const notes: string[] = []
-  if (p.w % 16 || p.h % 16) notes.push('非 16 的倍数')
-  const ratio = p.w / p.h
-  if (ratio > 3 || ratio < 1 / 3) notes.push('比例超出 1:3–3:1')
-  if (p.w * p.h > MAX_PIXELS) notes.push('像素数超过 3840×2160')
+  // The documented rules live in utils/gptImageSpec.ts, next to the popover's
+  // wording. Violations are reported but not blocked — an out-of-spec size is a
+  // probe, exactly like n=50 elsewhere.
+  const notes = sizeViolations(p.w, p.h)
   if (notes.length) return `⚠ ${notes.join(' · ')}，仍可发送以观察 API 反应`
   // In spec, but the docs call this range experimental — worth saying, since a
   // failure up here is expected behaviour rather than a finding.
-  if (p.w * p.h > EXPERIMENTAL_PIXELS) return '官方标注为实验性区间（> 2560×1440）'
+  if (isExperimentalSize(p.w, p.h)) return '官方标注为实验性区间（> 2560×1440）'
   return ''
 })
 
@@ -839,6 +932,17 @@ function compareRows(job: ImageJob): CompareRow[] {
    *  card never reads "默认" without saying what that resolved to. */
   const def = (v: string | number) => `默认 ${v}`
 
+  // The model varies within a batch now, so every card names it. `got` is the
+  // model the API reports having used, when it reports one at all — a gateway
+  // silently swapping models is caught here. An alias resolving to its own
+  // dated snapshot is not a swap; see modelMismatch.
+  rows.push({
+    label: '模型',
+    want: job.model,
+    got: job.actualModel ?? DASH,
+    bad: !!job.actualModel && modelMismatch(job.model, job.actualModel),
+  })
+
   const wantSize = job.size?.replace('x', '×')
   const gotSize = img?.width ? `${img.width}×${img.height}` : undefined
   rows.push({
@@ -930,12 +1034,6 @@ function compareRows(job: ImageJob): CompareRow[] {
     })
   }
 
-  // The model is implied by the config, so it is only worth a row when the API
-  // reports having used a different one — a gateway silently swapping models.
-  if (job.actualModel && job.actualModel !== job.model) {
-    rows.push({ label: '模型', want: job.model, got: job.actualModel, bad: true })
-  }
-
   return rows
 }
 
@@ -948,6 +1046,7 @@ const previewItems = computed<PreviewItem[]>(() =>
       .map((img, i) => ({
         src: img.src!,
         label: [
+          job.model,
           job.size?.replace('x', '×') ?? `默认 ${DEFAULTS.size}`,
           job.quality ?? `默认 ${DEFAULTS.quality}`,
           job.images.length > 1 ? `第 ${i + 1}/${job.images.length} 张` : '',
@@ -981,8 +1080,8 @@ function download(job: ImageJob) {
   // Index suffix keeps the n images of one request from overwriting each other.
   const idx = job.images.length > 1 ? `_${job.activeIndex + 1}` : ''
   // Unset params are dropped from the name rather than labelled — the job id
-  // already makes it unique.
-  const parts = [job.size, job.quality, String(job.id)].filter(Boolean)
+  // already makes it unique. The model leads, since a batch can now mix them.
+  const parts = [job.model, job.size, job.quality, String(job.id)].filter(Boolean)
   const a = document.createElement('a')
   a.href = img.src
   a.download = `${parts.join('_')}${idx}.${ext}`
@@ -1305,6 +1404,41 @@ function fmtFullTime(ts: number) {
   box-shadow: inset 2px 2px 4px rgba(0, 0, 0, 0.18);
 }
 
+/* Model chips carry their doc note, so they stack full-width, one per row,
+   rather than wrapping like the value chips — same arrangement as the Gemini
+   panel's model list. */
+.chips.models { flex-direction: column; align-items: stretch; }
+.model-chip {
+  display: flex; align-items: baseline; gap: 8px;
+  text-align: left;
+  font-family: 'Consolas', 'Menlo', 'Monaco', monospace;
+}
+.model-id { overflow-wrap: anywhere; }
+.chip-note {
+  margin-left: auto;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 400;
+  opacity: 0.75;
+  text-align: right;
+}
+/* Only hand-added ids carry this. Sized as a tap target inside the chip. */
+.chip-remove {
+  flex-shrink: 0;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 14px; line-height: 1;
+  opacity: 0.7;
+  transition: opacity 0.15s, background 0.15s;
+}
+.chip-remove:hover { opacity: 1; background: rgba(0, 0, 0, 0.12); }
+.chip.on .chip-remove:hover { background: rgba(255, 255, 255, 0.25); }
+
+/* The selection failed to reach the account. Quiet, with the reason on hover:
+   the batch still runs with what is on screen, it just will not be remembered. */
+.save-err { font-size: 10.5px; font-weight: 600; color: var(--danger); cursor: help; }
+
 .num-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -1538,6 +1672,10 @@ function fmtFullTime(ts: number) {
   /* Two per row instead of auto-fit's one-per-row at this width */
   .num-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
   .chip-grid { gap: 12px; }
+
+  /* Model id and its note no longer fit on one line; the note drops below. */
+  .model-chip { flex-wrap: wrap; }
+  .chip-note { margin-left: 0; flex-basis: 100%; text-align: left; }
 }
 
 /* Very narrow (small phones in portrait). */

@@ -1,6 +1,10 @@
 from pydantic import BaseModel, Field
 from typing import Any, Optional, List
 
+# One width for a model id everywhere it can be typed: config lists and the
+# per-request field below must agree, or an id that saves fine would fail to send.
+from .image_config import MAX_MODEL_LEN
+
 # Bounds are deliberately wider than the vendor's documented ranges.
 #
 # This tool exists to find where a gateway disagrees with the published spec, so a
@@ -28,8 +32,20 @@ class GenerateRequest(BaseModel):
     Every param is optional and omitted from the upstream payload when None —
     "unset" means "let the API apply its own default", which is a distinct case
     from any value the user could pick.
+
+    `model_id` is the one exception to that rule: there is no "let the API
+    decide" for it (an Images call with no model falls back to a model that no
+    longer exists), so when the request leaves it unset the account's saved
+    selection is used instead — see api/image_gen.resolve_model.
     """
+    # model_id names the upstream model, not a Pydantic attribute.
+    model_config = {"protected_namespaces": ()}
+
     prompt: str = Field(min_length=1, max_length=MAX_PROMPT_LEN)
+    # Per request rather than read from the stored config, because the matrix
+    # varies it: several models ticked is one request per model, on identical
+    # params, which is how two models behind one gateway get compared.
+    model_id: Optional[str] = Field(default=None, max_length=MAX_MODEL_LEN)
     size: Optional[str] = Field(default=None, max_length=MAX_PARAM_LEN)
     quality: Optional[str] = Field(default=None, max_length=MAX_PARAM_LEN)
     n: Optional[int] = Field(default=None, ge=N_MIN, le=N_MAX)

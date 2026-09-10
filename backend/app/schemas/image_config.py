@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from datetime import datetime
 
@@ -8,6 +8,9 @@ from datetime import datetime
 MAX_URL_LEN = 500
 MAX_KEY_LEN = 500
 MAX_MODEL_LEN = 100
+# Room for every documented id, all the dated snapshots and a handful of gateway
+# aliases. A list longer than this is a client bug, not a use case.
+MAX_MODEL_LIST = 32
 
 # Wider than the drawer's own 60-600 on purpose, but finite at both ends: 0 or a
 # negative value reaches httpx as "fail immediately", and an unbounded one pins a
@@ -34,19 +37,55 @@ class ImageConfigBase(BaseModel):
 
     baseurl: str = ""
     api_key: str = ""
-    model_id: str = "gpt-image-2"
+    # Legacy. Empty on rows created after the model moved into the parameter
+    # panel; still returned so a stale frontend build keeps working through a
+    # deploy. See models/user.py for how bootstrap carries it into the selection.
+    model_id: str = ""
+    # The panel's ticked models and the user's own additions — see models/user.py.
+    selected_models: list[str] = Field(default_factory=list)
+    custom_models: list[str] = Field(default_factory=list)
     timeout: int = 480
 
 
 class ImageConfigUpdate(ImageConfigBase):
-    """What a client may write. This is where the bounds apply."""
+    """What a client may write. This is where the bounds apply.
+
+    Every field has a default and crud._update_config applies exclude_unset, so
+    a client may send any subset: the drawer writes the three connection fields,
+    the parameter panel writes the two model lists, and neither can clobber the
+    other's half with a stale copy.
+    """
 
     model_config = _PROTECTED
 
     baseurl: str = Field(default="", max_length=MAX_URL_LEN)
     api_key: str = Field(default="", max_length=MAX_KEY_LEN)
-    model_id: str = Field(default="gpt-image-2", max_length=MAX_MODEL_LEN)
+    model_id: str = Field(default="", max_length=MAX_MODEL_LEN)
+    selected_models: list[str] = Field(default_factory=list, max_length=MAX_MODEL_LIST)
+    custom_models: list[str] = Field(default_factory=list, max_length=MAX_MODEL_LIST)
     timeout: int = Field(default=480, ge=TIMEOUT_MIN, le=TIMEOUT_MAX)
+
+    @field_validator("selected_models", "custom_models", mode="before")
+    @classmethod
+    def normalize_model_list(cls, value: list | None) -> list[str]:
+        """Strip, drop empties and duplicates, cap each id at the column width.
+
+        Unlike the Gemini side, nothing about the characters is refused: the id
+        travels in a JSON body field, not the request path, so it cannot escape
+        anywhere — and what a gateway does with an odd-looking id is observable,
+        which is the point of letting the user type one in.
+        """
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for raw in value or []:
+            model = str(raw).strip()
+            if not model or model in seen:
+                continue
+            if len(model) > MAX_MODEL_LEN:
+                raise ValueError(f"模型 ID 超过 {MAX_MODEL_LEN} 字符")
+            seen.add(model)
+            cleaned.append(model)
+        return cleaned
 
 
 class ImageConfigOut(ImageConfigBase):

@@ -9,6 +9,9 @@ import { useImageGenStore } from '@/stores/imageGen'
 import { b64ToBlobUrl, runPool, sampleAlpha } from '@/utils/batch'
 import { detectVendor, aggregateVendor, describeDataKind } from '@/utils/vendor'
 import { DEFAULT_PROMPT } from '@/utils/defaultPrompt'
+import {
+  DEFAULT_MODEL, EXTENDED_QUALITY, QUALITY_TIERS, supportsExtendedQuality,
+} from '@/utils/gptImageSpec'
 
 // ─── Test suite definition ──────────────────────────────────────────────────
 
@@ -42,10 +45,14 @@ function buildTestCases(): TestCase[] {
   }
 
   // ---- quality ----
-  for (const quality of ['low', 'medium', 'high'] as const) {
+  // All five tiers. xhigh and max arrived with gpt-image-2.5 on 2026-09-08; the
+  // guide says earlier models stop at high, so on those two probes against an
+  // older model the answer being looked for is the refusal itself — see
+  // expectsRefusal.
+  for (const quality of QUALITY_TIERS) {
     cases.push({
       id: `quality-${quality}`,
-      label: `quality = ${quality}`,
+      label: `quality = ${quality}${EXTENDED_QUALITY.has(quality) ? '（2.5 新增）' : ''}`,
       dimension: 'quality',
       req: { quality },
     })
@@ -80,11 +87,12 @@ function buildTestCases(): TestCase[] {
   })
 
   // ---- background ----
-  // Transparency went to preview for gpt-image-2 on 2026-08-20, so this group
-  // checks a capability that is both new and still in preview. The verdict comes
-  // from sampling the decoded pixels, not from anything the API claims — the
-  // announcement thread itself carries a report of requested transparency
-  // arriving as a rendered checkerboard instead of real alpha.
+  // Transparency went to preview for gpt-image-2 on 2026-08-20 and is a listed
+  // capability of both gpt-image-2.5 models, so this group checks something
+  // still new. The verdict comes from sampling the decoded pixels, not from
+  // anything the API claims — the announcement thread itself carries a report
+  // of requested transparency arriving as a rendered checkerboard instead of
+  // real alpha.
   cases.push({
     id: 'bg-transparent-png',
     label: 'background = transparent（png）',
@@ -128,9 +136,9 @@ function buildTestCases(): TestCase[] {
   return cases
 }
 
-/** How many probes the suite runs. Derived, not written down: the hand-maintained
- *  number was wrong by two for several commits after a case was removed, and it
- *  is quoted in the UI as the credit the run will spend. */
+/** How many probes the suite runs per model. Derived, not written down: the
+ *  hand-maintained number was wrong by two for several commits after a case was
+ *  removed, and it is quoted in the UI as the credit the run will spend. */
 export const TEST_CASE_COUNT = buildTestCases().length
 
 /** One checkbox per dimension in the panel. Derived from the case list itself so
@@ -155,10 +163,29 @@ export const DIMENSION_OPTIONS = (() => {
   }))
 })()
 
-/** Cards are capped at this value for consistency with the generate/edit pools.
- *  In practice run() calls clear() first so this is a guard rather than a
- *  live eviction path — a single suite is only 17 cards. */
-const MAX_RESULTS = 50
+/** Cards retained. A full suite is TEST_CASE_COUNT cards per model, and the
+ *  panel's model list runs to six documented ids plus custom ones, so this has
+ *  to hold a few complete runs' worth. run() clears first, so in practice it is
+ *  a guard rather than a live eviction path. */
+const MAX_RESULTS = 200
+
+/** Probes with no right answer to score, so a refusal is recorded rather than
+ *  failed: the transparent-jpeg combination (impossible by construction), and
+ *  xhigh/max sent to a model whose docs stop at high. A custom id is unknown
+ *  territory, so nothing is expected of it and a refusal there is a plain fail
+ *  — the body is readable in the raw viewer either way. */
+function expectsRefusal(c: TestCase, model: string): boolean {
+  if (c.expectRefusal) return true
+  if (c.dimension === 'quality' && c.req.quality && EXTENDED_QUALITY.has(c.req.quality)) {
+    return supportsExtendedQuality(model) === false
+  }
+  return false
+}
+
+/** Every case runs once per model, so a result needs both to be addressed. */
+function resultKey(model: string, caseId: string) {
+  return `${model}|${caseId}`
+}
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
@@ -189,6 +216,7 @@ function parseSize(s: string): [number, number] | null {
 
 function evaluate(
   c: TestCase,
+  model: string,
   res: GenerateResponse,
   img: GeneratedImage | undefined,
   dims: { w: number; h: number } | null,
@@ -209,12 +237,16 @@ function evaluate(
     }
 
     case 'quality': {
-      // Tokens are the best proxy: high should be > medium > low.
-      // We record here and evaluate the group in post-processing.
+      // Tokens are the best proxy: each tier should cost at least as much as
+      // the one below it. Recorded here, judged per model in post-processing.
       const out = res.output_tokens ?? res.input_tokens ?? null
+      // A tier the docs do not list for this model, accepted anyway: worth
+      // saying, since the tokens then tell whether it was honoured or clamped.
+      const undocumented = c.req.quality && EXTENDED_QUALITY.has(c.req.quality)
+        && supportsExtendedQuality(model) === false
       return {
         verdict: 'info',
-        detail: `output_tokens = ${out ?? '未知'}`,
+        detail: `output_tokens = ${out ?? '未知'}${undocumented ? '（文档未为该模型列出此档位，API 仍接受）' : ''}`,
       }
     }
 
@@ -292,11 +324,23 @@ export const useApiTestStore = defineStore('apiTest', () => {
    *  panel renders one checkbox per entry. */
   const selectedDims = ref<TestDimension[]>(DIMENSION_OPTIONS.map(o => o.key))
 
-  /** How many probes the current selection amounts to — quoted in the header
-   *  and on the start button as the credit the run will spend. */
+  /** The models the suite runs against — whatever the parameter panel has
+   *  ticked. Every probe goes out once per model, all concurrently, so models
+   *  behind the same gateway are compared on identical requests. The fallback
+   *  is unreachable while the panel keeps at least one model ticked; it exists
+   *  so this store never sends a request with no model. */
+  const models = computed(() =>
+    imageGen.matrix.models.length ? [...imageGen.matrix.models] : [DEFAULT_MODEL],
+  )
+
+  /** How many probes the current selection amounts to, per model. */
   const selectedCount = computed(() =>
     buildTestCases().filter(c => selectedDims.value.includes(c.dimension)).length,
   )
+
+  /** Requests the next run will actually send: probes × models. Quoted in the
+   *  header and on the start button as the credit the run will spend. */
+  const plannedCount = computed(() => selectedCount.value * models.value.length)
 
   let logSeq = 0
   let ctl: AbortController | null = null
@@ -308,8 +352,8 @@ export const useApiTestStore = defineStore('apiTest', () => {
   /** Request context for the body-shape checks in detectVendor: revised_prompt
    *  is legitimate on dall-e-3, and a "revised" prompt equal to the one sent
    *  is a gateway filling the field in. */
-  function vendorCtx(prompt: string) {
-    return { model: imageGen.config.model_id, prompt }
+  function vendorCtx(model: string, prompt: string) {
+    return { model, prompt }
   }
 
   const passCount = computed(
@@ -372,11 +416,22 @@ export const useApiTestStore = defineStore('apiTest', () => {
       addLog('warn', '⚠ 未勾选任何检测项')
       return
     }
-    results.value = cases.map(c => ({ case: c, status: 'pending' as const }))
+    const runModels = models.value
+    const multi = runModels.length > 1
+    /** Log prefix naming the model — only when there is more than one to tell apart. */
+    const tag = (model: string) => (multi ? `[${model}] ` : '')
 
-    const total = cases.length
-    addLog('info', `▶ 开始 gpt-image 参数兼容性测试`)
-    addLog('info', `共 ${total} 个探测 · 并发 ${CONCURRENCY}`)
+    // Grouped by model, cases in suite order within each: the grid then reads
+    // as one block per model, and post-processing walks each block on its own.
+    results.value = runModels.flatMap(model =>
+      cases.map(c => ({ key: resultKey(model, c.id), model, case: c, status: 'pending' as const })),
+    )
+
+    const total = results.value.length
+    addLog('info', `▶ 开始 gpt-image 参数兼容性测试 · 模型: ${runModels.join(' / ')}`)
+    addLog('info', multi
+      ? `共 ${total} 个探测（${cases.length} 项 × ${runModels.length} 个模型） · 并发 ${CONCURRENCY}`
+      : `共 ${total} 个探测 · 并发 ${CONCURRENCY}`)
     addLog('info', `生成 Prompt: "${DEFAULT_PROMPT.slice(0, 30)}…" | 编辑 Prompt: "${EDIT_PROMPT}"`)
     addLog('rule', '')
 
@@ -397,7 +452,10 @@ export const useApiTestStore = defineStore('apiTest', () => {
     const t0 = performance.now()
 
     await runPool(
-      cases.map((c, i) => async () => {
+      results.value.map((r, i) => async () => {
+        const c = r.case
+        const model = r.model
+
         if (signal.aborted) {
           results.value[i].status = 'cancelled'
           return
@@ -408,8 +466,8 @@ export const useApiTestStore = defineStore('apiTest', () => {
         // Built outside the try so the error branch can hand the prompt to the
         // vendor check as well - a refusal body is evidence too.
         const req: GenerateRequest = c.isEdit
-          ? { prompt: EDIT_PROMPT, ...c.req }
-          : { prompt: DEFAULT_PROMPT, quality: 'low', size: '1024x1024', ...c.req }
+          ? { prompt: EDIT_PROMPT, model_id: model, ...c.req }
+          : { prompt: DEFAULT_PROMPT, model_id: model, quality: 'low', size: '1024x1024', ...c.req }
 
         try {
           let res: GenerateResponse
@@ -417,7 +475,7 @@ export const useApiTestStore = defineStore('apiTest', () => {
           if (c.isEdit) {
             if (!seedFile) {
               results.value[i].status = 'cancelled'
-              addLog('warn', `⚠ ${c.label} — 跳过（参考图未加载）`)
+              addLog('warn', `⚠ ${tag(model)}${c.label} — 跳过（参考图未加载）`)
               return
             }
             res = await imageGenApi.edit(req, [seedFile], null, signal)
@@ -437,7 +495,7 @@ export const useApiTestStore = defineStore('apiTest', () => {
 
           // Judged once, here, with the request context the body checks need.
           const vendor = res.upstream
-            ? detectVendor(res.upstream, vendorCtx(req.prompt))
+            ? detectVendor(res.upstream, vendorCtx(model, req.prompt))
             : undefined
 
           // Build blob URL
@@ -458,7 +516,7 @@ export const useApiTestStore = defineStore('apiTest', () => {
             ? await sampleAlpha(src)
             : null
 
-          const { verdict, detail } = evaluate(c, res, imgData, dims, hasAlpha)
+          const { verdict, detail } = evaluate(c, model, res, imgData, dims, hasAlpha)
 
           Object.assign(results.value[i], {
             status:        'done',
@@ -486,7 +544,7 @@ export const useApiTestStore = defineStore('apiTest', () => {
 
           const icon = verdict === 'pass' ? '✓' : verdict === 'fail' ? '✗' : '·'
           const lvl  = verdict === 'fail' ? 'error' : verdict === 'pass' ? 'ok' : 'info'
-          addLog(lvl, `${icon} ${c.label}  ${detail}  · ${describeDataKind(results.value[i])}  (${elapsed}ms)`)
+          addLog(lvl, `${icon} ${tag(model)}${c.label}  ${detail}  · ${describeDataKind(results.value[i])}  (${elapsed}ms)`)
 
         } catch (e: any) {
           const elapsed = Math.round(performance.now() - caseT0)
@@ -497,7 +555,7 @@ export const useApiTestStore = defineStore('apiTest', () => {
           // answer it was sent to get, not a failure of the API. Recording the
           // upstream's own wording matters here: it is the only place this tool
           // learns what an unsupported combination actually returns.
-          const refused = c.expectRefusal && !is429 && !signal.aborted
+          const refused = expectsRefusal(c, model) && !is429 && !signal.aborted
 
           Object.assign(results.value[i], {
             status:    signal.aborted ? 'cancelled' : 'error',
@@ -513,12 +571,12 @@ export const useApiTestStore = defineStore('apiTest', () => {
             // And the refusal body is origin evidence as well: Azure's
             // contentFilter code, or a Codex bridge blaming the
             // image_generation tool for n>1.
-            vendor:    e?.upstream ? detectVendor(e.upstream, vendorCtx(req.prompt)) : undefined,
+            vendor:    e?.upstream ? detectVendor(e.upstream, vendorCtx(model, req.prompt)) : undefined,
           } as Partial<TestResult>)
 
-          const label = is429 ? `⚡ ${c.label}  限流 429`
-                      : refused ? `· ${c.label}  API 拒绝 → ${errMsg}`
-                      : `✗ ${c.label}  ${errMsg}`
+          const label = is429 ? `⚡ ${tag(model)}${c.label}  限流 429`
+                      : refused ? `· ${tag(model)}${c.label}  API 拒绝 → ${errMsg}`
+                      : `✗ ${tag(model)}${c.label}  ${errMsg}`
           addLog(is429 || refused ? 'warn' : 'error', `${label}  (${elapsed}ms)`)
         }
       }),
@@ -528,11 +586,12 @@ export const useApiTestStore = defineStore('apiTest', () => {
 
     // ── Post-processing ────────────────────────────────────────────────────
 
-    // Quality: verify tokens increase with quality level.
-    postEvalQuality()
-
-    // Compression: verify byte sizes change with compression level.
-    postEvalCompression()
+    // Token ladders and byte sizes only compare within one model, so each
+    // model's block is judged on its own.
+    for (const model of runModels) {
+      postEvalQuality(model, tag(model))
+      postEvalCompression(model, tag(model))
+    }
 
     // Who actually answered — judged from every captured raw exchange at once.
     // All probes hit the same configured baseurl, so agreement is expected and
@@ -550,40 +609,40 @@ export const useApiTestStore = defineStore('apiTest', () => {
 
   // ── Group evaluations ────────────────────────────────────────────────────
 
-  function postEvalQuality() {
-    const getResult = (q: string) =>
-      results.value.find(r => r.case.id === `quality-${q}`)
-
-    const low    = getResult('low')
-    const medium = getResult('medium')
-    const high   = getResult('high')
-
-    if (!low || !medium || !high) return
-    if ([low, medium, high].some(r => r.status !== 'done')) return
-
-    const tLow  = low.outputTokens  ?? 0
-    const tMed  = medium.outputTokens ?? 0
-    const tHigh = high.outputTokens  ?? 0
-
-    if (tLow && tMed && tHigh) {
-      const ordered = tLow < tMed && tMed < tHigh
-      const v: TestVerdict = ordered ? 'pass' : 'fail'
-      const note = `token 消耗 low=${tLow} medium=${tMed} high=${tHigh}`
-      ;[low, medium, high].forEach(r => { r.verdict = v; r.detail += `  ${note}` })
-      addLog(ordered ? 'ok' : 'warn',
-        `quality token 顺序 ${ordered ? '正确 ✓' : '异常 ✗'}  ${note}`)
-    } else {
-      addLog('info', 'quality — output_tokens 为空，无法通过 token 验证')
-    }
+  function find(model: string, caseId: string) {
+    return results.value.find(r => r.key === resultKey(model, caseId))
   }
 
-  function postEvalCompression() {
-    const getResult = (n: number) =>
-      results.value.find(r => r.case.id === `comp-${n}`)
+  function postEvalQuality(model: string, tag: string) {
+    // Every tier that came back, in documented order. Fewer than two and there
+    // is no ladder to check; a refused xhigh/max on an older model is already
+    // recorded as info on its own card.
+    const done = QUALITY_TIERS
+      .map(q => ({ q, r: find(model, `quality-${q}`) }))
+      .filter((x): x is { q: typeof QUALITY_TIERS[number]; r: TestResult } => x.r?.status === 'done')
+    if (done.length < 2) return
 
-    const r0   = getResult(0)
-    const r50  = getResult(50)
-    const r100 = getResult(100)
+    const tokens = done.map(x => x.r.outputTokens ?? 0)
+    if (tokens.some(t => !t)) {
+      addLog('info', `${tag}quality — output_tokens 为空，无法通过 token 验证`)
+      return
+    }
+
+    // Non-decreasing along the ladder. Strict ordering was the rule with three
+    // tiers; with five, two adjacent tiers spending the same tokens is not
+    // evidence of anything, whereas a higher tier spending *less* is.
+    const ordered = tokens.every((t, i) => i === 0 || tokens[i - 1] <= t)
+    const v: TestVerdict = ordered ? 'pass' : 'fail'
+    const note = `token 消耗 ${done.map(x => `${x.q}=${x.r.outputTokens}`).join(' ')}`
+    done.forEach(x => { x.r.verdict = v; x.r.detail += `  ${note}` })
+    addLog(ordered ? 'ok' : 'warn',
+      `${tag}quality token 顺序 ${ordered ? '正确 ✓' : '异常 ✗'}  ${note}`)
+  }
+
+  function postEvalCompression(model: string, tag: string) {
+    const r0   = find(model, 'comp-0')
+    const r50  = find(model, 'comp-50')
+    const r100 = find(model, 'comp-100')
 
     if (!r0 || !r50 || !r100) return
     if ([r0, r50, r100].some(r => r.status !== 'done')) return
@@ -602,9 +661,9 @@ export const useApiTestStore = defineStore('apiTest', () => {
       r50.detail  = `comp=50 → ${(b50 / 1024).toFixed(0)} KB`
       r100.detail = `comp=100 → ${(b100 / 1024).toFixed(0)} KB  差异 ${ratio}%`
       addLog(pass ? 'ok' : 'warn',
-        `compression 文件大小: 0→${(b0/1024).toFixed(0)}KB  50→${(b50/1024).toFixed(0)}KB  100→${(b100/1024).toFixed(0)}KB  差异 ${ratio}%  ${pass ? '✓' : '✗'}`)
+        `${tag}compression 文件大小: 0→${(b0/1024).toFixed(0)}KB  50→${(b50/1024).toFixed(0)}KB  100→${(b100/1024).toFixed(0)}KB  差异 ${ratio}%  ${pass ? '✓' : '✗'}`)
     } else {
-      addLog('info', 'compression — byte_size 为空，无法验证')
+      addLog('info', `${tag}compression — byte_size 为空，无法验证`)
     }
   }
 
@@ -632,21 +691,15 @@ export const useApiTestStore = defineStore('apiTest', () => {
       : `${parts}（官方规范：GPT image 仅返回 b64_json，url / data:URL 是网关行为）`
   }
 
-  function buildSummary(elapsedMs: number): string {
-    const now  = new Date()
-    const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
-    const model = imageGen.config.model_id || 'gpt-image-?'
-
-    const lines: string[] = [
-      `${model} 参数兼容性报告（${date}）`,
-      `测试数: ${results.value.length} · 并发: ${CONCURRENCY} · 用时: ${(elapsedMs / 1000).toFixed(1)}s`,
-    ]
-
-    // Sections print only when their dimension was selected for this run —
-    // an empty "0/0 生效" block reads like a failure, not like an omission.
+  /** One model's block of the report. Sections print only when their dimension
+   *  was selected for this run — an empty "0/0 生效" block reads like a
+   *  failure, not like an omission. */
+  function modelSections(model: string): string[] {
+    const rs = results.value.filter(r => r.model === model)
+    const lines: string[] = []
 
     // size group
-    const sizeResults = results.value.filter(r => r.case.dimension === 'size')
+    const sizeResults = rs.filter(r => r.case.dimension === 'size')
     if (sizeResults.length) {
       const sizePass = sizeResults.filter(r => r.verdict === 'pass').length
       const sizeFail = sizeResults.filter(r => r.verdict === 'fail')
@@ -657,18 +710,22 @@ export const useApiTestStore = defineStore('apiTest', () => {
     }
 
     // quality group
-    const qr = results.value.filter(r => r.case.dimension === 'quality')
+    const qr = rs.filter(r => r.case.dimension === 'quality')
     if (qr.length) {
       lines.push('')
       lines.push(`■ quality`)
       qr.forEach(r => {
         const q = r.case.req.quality
-        lines.push(`  · ${q}  output_tokens=${r.outputTokens ?? '?'}  ${r.verdict === 'pass' ? '✓ 顺序符合预期' : r.verdict === 'fail' ? '✗ 顺序异常' : '· 记录'}`)
+        // A refused tier (xhigh/max on an older model) has no token figure; its
+        // detail already quotes the API's own wording.
+        lines.push(r.status === 'done'
+          ? `  · ${q}  output_tokens=${r.outputTokens ?? '?'}  ${r.verdict === 'pass' ? '✓ 顺序符合预期' : r.verdict === 'fail' ? '✗ 顺序异常' : '· 记录'}`
+          : `  · ${q}  ${r.detail ?? r.status}`)
       })
     }
 
     // format group
-    const fr = results.value.filter(r => r.case.dimension === 'format')
+    const fr = rs.filter(r => r.case.dimension === 'format')
     if (fr.length) {
       const fpass = fr.filter(r => r.verdict === 'pass').length
       lines.push('')
@@ -677,7 +734,7 @@ export const useApiTestStore = defineStore('apiTest', () => {
     }
 
     // compression group
-    const cr = results.value.filter(r => r.case.dimension === 'compression')
+    const cr = rs.filter(r => r.case.dimension === 'compression')
     if (cr.length) {
       const cpass = cr.filter(r => r.verdict === 'pass').length
       lines.push('')
@@ -686,7 +743,7 @@ export const useApiTestStore = defineStore('apiTest', () => {
     }
 
     // n group — the only hard count in the suite
-    const nr = results.value.filter(r => r.case.dimension === 'n')
+    const nr = rs.filter(r => r.case.dimension === 'n')
     if (nr.length) {
       const npass = nr.filter(r => r.verdict === 'pass').length
       lines.push('')
@@ -695,7 +752,7 @@ export const useApiTestStore = defineStore('apiTest', () => {
     }
 
     // background — the only group whose outcome is measured from the pixels
-    const br = results.value.filter(r => r.case.dimension === 'background')
+    const br = rs.filter(r => r.case.dimension === 'background')
     if (br.length) {
       const bpass = br.filter(r => r.verdict === 'pass').length
       const bscored = br.filter(r => !r.case.expectRefusal).length
@@ -708,10 +765,37 @@ export const useApiTestStore = defineStore('apiTest', () => {
     }
 
     // edit
-    const edit = results.value.find(r => r.case.dimension === 'edit')
+    const edit = rs.find(r => r.case.dimension === 'edit')
     if (edit) {
       lines.push('')
       lines.push(`■ 编辑端点（spring.jpg + "${EDIT_PROMPT}"）  ${edit.status === 'done' ? (edit.verdict === 'pass' ? '✓ 正常' : '✗ 异常') : '未完成'}`)
+    }
+
+    return lines
+  }
+
+  function buildSummary(elapsedMs: number): string {
+    const now  = new Date()
+    const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
+    // From the results, not the live selection: the panel may have changed
+    // since the run started, and the report describes the run.
+    const runModels = Array.from(new Set(results.value.map(r => r.model)))
+    const perModel = runModels.length ? results.value.length / runModels.length : results.value.length
+
+    const lines: string[] = [
+      `gpt-image 参数兼容性报告（${date}）`,
+      `模型: ${runModels.join(' / ')}`,
+      `测试数: ${results.value.length}` +
+        (runModels.length > 1 ? `（每模型 ${perModel} 项）` : '') +
+        ` · 并发: ${CONCURRENCY} · 用时: ${(elapsedMs / 1000).toFixed(1)}s`,
+    ]
+
+    for (const model of runModels) {
+      if (runModels.length > 1) {
+        lines.push('')
+        lines.push(`━━━━ ${model} ━━━━`)
+      }
+      lines.push(...modelSections(model))
     }
 
     // data kind — how the bytes arrived, which the reference fixes as b64_json
@@ -727,7 +811,7 @@ export const useApiTestStore = defineStore('apiTest', () => {
 
   return {
     logs, results, running, summary,
-    selectedDims, selectedCount,
+    selectedDims, selectedCount, models, plannedCount,
     passCount, failCount, doneCount, totalCount,
     run, stop, clear,
   }

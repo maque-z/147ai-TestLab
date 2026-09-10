@@ -14,13 +14,18 @@
         <n-form-item label="API Key">
           <n-input v-model:value="form.api_key" type="password" show-password-on="click" placeholder="sk-..." />
         </n-form-item>
-        <n-form-item label="Model ID">
-          <n-input v-model:value="form.model_id" placeholder="gpt-image-2" />
-        </n-form-item>
         <n-form-item label="超时 (秒)">
           <n-input-number v-model:value="form.timeout" :min="60" :max="600" style="width:100%" placeholder="480"/>
         </n-form-item>
       </n-form>
+
+      <!-- The model used to be a field here. It is a matrix dimension now, so
+           it lives with the other params — and this drawer must not carry a
+           copy of it, or saving the drawer would overwrite a selection made
+           since it was opened. -->
+      <p class="field-help">
+        模型不在这里填：参数面板的「模型」一栏可勾选多个官方模型，或添加自定义 ID；勾选和添加会自动保存到当前账号。
+      </p>
 
       <template #footer>
         <div style="display:flex;gap:10px;justify-content:flex-end">
@@ -38,13 +43,24 @@ import { useMessage, NDrawer, NDrawerContent, NForm, NFormItem, NInput,
 import { useImageGenStore } from '@/stores/imageGen'
 import type { ImageConfig } from '@/types'
 
+/** Only the connection fields. The model lists are written by the parameter
+ *  panel through the same endpoint, which applies whatever subset it is sent —
+ *  so this form deliberately never carries them. */
+type ConnectionForm = Pick<ImageConfig, 'baseurl' | 'api_key' | 'timeout'>
+
 const visible = defineModel<boolean>('show', { required: true })
 const message = useMessage()
 const store = useImageGenStore()
 const saving = ref(false)
-const form = ref<ImageConfig>({ ...store.config })
 
-watch(visible, (v) => { if (v) form.value = { ...store.config } })
+function snapshot(): ConnectionForm {
+  const { baseurl, api_key, timeout } = store.config
+  return { baseurl, api_key, timeout }
+}
+
+const form = ref<ConnectionForm>(snapshot())
+
+watch(visible, (v) => { if (v) form.value = snapshot() })
 
 async function handleSave() {
   saving.value = true
@@ -59,3 +75,7 @@ async function handleSave() {
   }
 }
 </script>
+
+<style scoped>
+.field-help { margin: -4px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.6; }
+</style>

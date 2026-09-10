@@ -24,7 +24,7 @@ from ..core.imaging import (
     image_dimensions,
 )
 from ..crud import user as user_crud
-from ..schemas.image_config import ImageConfigOut, ImageConfigUpdate
+from ..schemas.image_config import MAX_MODEL_LEN, ImageConfigOut, ImageConfigUpdate
 from ..schemas.image_gen import (
     COMPRESSION_MAX,
     COMPRESSION_MIN,
@@ -361,7 +361,9 @@ async def build_response(data: dict, *, cfg, prompt: str, payload: dict,
 
     return GenerateResponse(
         images=images,
-        model=cfg.model_id,
+        # What was actually sent, not the account default: the batch varies the
+        # model per request now, so the card has to be labelled from the payload.
+        model=payload.get("model") or cfg.model_id,
         prompt=prompt,
         size=payload.get("size"),
         quality=payload.get("quality"),
@@ -409,6 +411,22 @@ def optional_params(*, size, quality, output_format, output_compression, moderat
     return params
 
 
+def resolve_model(requested: str | None, cfg: UpstreamConfig) -> str:
+    """The model for this request: the matrix's choice, else the account's saved
+    selection (deps.snapshot_config puts its first entry in cfg.model_id).
+
+    The only thing checked is that there is one. Unlike the Gemini side, the id
+    goes into a JSON body field rather than the request path, so no character in
+    it can escape anywhere — and an odd-looking id is a probe like any other:
+    whether a gateway accepts `gpt-image-2.5-flare-2026-09-08`, or a house alias,
+    is exactly the kind of question the custom-model input exists to ask.
+    """
+    model = (requested or cfg.model_id or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="请先在参数面板中选择模型")
+    return model
+
+
 @router.get("/config", response_model=ImageConfigOut)
 def get_config(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     return user_crud.get_image_config(db, current_user.id)
@@ -438,11 +456,14 @@ async def generate(
     Answers as a heartbeat stream, so `response_model` is gone from the
     decorator — the shape is still GenerateResponse, wrapped in the envelope
     described in core/streaming.py. Auth and config errors still arrive as real
-    status codes: their dependencies run before the first byte is sent.
+    status codes: their dependencies run before the first byte is sent, and so
+    does resolve_model below — "no model" is a 400, not an envelope.
     """
+    model = resolve_model(body.model_id, cfg)
+
     async def work() -> GenerateResponse:
         payload: dict = {
-            "model": cfg.model_id,
+            "model": model,
             "prompt": body.prompt,
             # n omitted when unset, like every other optional param: substituting 1
             # would report the API's default as though it had been requested, and
@@ -459,7 +480,8 @@ async def generate(
         }
 
         logger.info(
-            "POST /v1/images/generations  size=%s quality=%s background=%s",
+            "POST /v1/images/generations  model=%s size=%s quality=%s background=%s",
+            model,
             payload.get("size", "<default>"),
             payload.get("quality", "<default>"),
             payload.get("background", "<default>"),
@@ -484,6 +506,12 @@ async def edit(
     prompt: str = Form(..., min_length=1, max_length=MAX_PROMPT_LEN),
     images: list[UploadFile] = File(...),
     mask: UploadFile | None = File(None),
+    # Same role as GenerateRequest.model_id, same width, and the same wire name
+    # via the alias. The Python name avoids the `model_` prefix on purpose:
+    # FastAPI synthesises a Pydantic model for the form fields, and a field called
+    # model_id there trips Pydantic's protected-namespace warning on every start,
+    # with no model_config of ours to switch it off.
+    requested_model: str | None = Form(None, alias="model_id", max_length=MAX_MODEL_LEN),
     size: str | None = Form(None, max_length=MAX_PARAM_LEN),
     quality: str | None = Form(None, max_length=MAX_PARAM_LEN),
     n: int | None = Form(None, ge=N_MIN, le=N_MAX),
@@ -514,6 +542,9 @@ async def edit(
     and "第 3 张参考图格式不对" is worth a status code rather than an envelope.
     Only the upstream call itself — the part that takes minutes — is wrapped.
     """
+    # Before the uploads are read: "no model" should not cost a 16-file parse.
+    model = resolve_model(requested_model, cfg)
+
     if not images:
         raise HTTPException(status_code=400, detail="请至少上传 1 张参考图")
     if len(images) > MAX_IMAGES:
@@ -570,7 +601,7 @@ async def edit(
             files.append(("mask", (mask.filename or "mask.png", mask_bytes, "image/png")))
 
     payload: dict = {
-        "model": cfg.model_id,
+        "model": model,
         "prompt": prompt,
         # Omitted when unset — same reason as the generate endpoint.
         **({"n": n} if n is not None else {}),
@@ -588,8 +619,8 @@ async def edit(
     form = {k: str(v) for k, v in payload.items()}
 
     logger.info(
-        "POST /v1/images/edits  images=%d mask=%s size=%s quality=%s background=%s",
-        len(images), "yes" if len(files) > len(images) else "no",
+        "POST /v1/images/edits  model=%s images=%d mask=%s size=%s quality=%s background=%s",
+        model, len(images), "yes" if len(files) > len(images) else "no",
         payload.get("size", "<default>"), payload.get("quality", "<default>"),
         payload.get("background", "<default>"),
     )

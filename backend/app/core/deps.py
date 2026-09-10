@@ -158,10 +158,16 @@ def snapshot_config(cfg, *, key_hint: str = "API Key") -> UpstreamConfig:
         raise HTTPException(status_code=400, detail=f"请先在配置中填写 {key_hint}")
     if not cfg.baseurl:
         raise HTTPException(status_code=400, detail="请先在配置中填写 Base URL")
+    # The gpt-image table now carries a per-account selection; its first entry
+    # stands in for the legacy single model_id, so a request that names no model
+    # (an older frontend build, mid-deploy) still has something to send. The
+    # Gemini table has no such column, hence getattr — both configs come through
+    # here on purpose, so the two cannot drift on the checks above.
+    selected = getattr(cfg, "selected_models", None) or []
     return UpstreamConfig(
         baseurl=cfg.baseurl,
         api_key=cfg.api_key,
-        model_id=cfg.model_id or "",
+        model_id=(selected[0] if selected else None) or cfg.model_id or "",
         # A null timeout would hand httpx "wait forever" and pin a worker on a
         # hung upstream. Falls back to the column default.
         timeout=cfg.timeout or 480,

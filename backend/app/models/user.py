@@ -51,7 +51,23 @@ class UserImageConfig(Base):
     # API connection
     baseurl = Column(String(500), default="")
     api_key = Column(String(500), default="")
-    model_id = Column(String(100), default="gpt-image-2")
+    # Legacy single-model field. The model is chosen per request from the
+    # parameter panel now (selected_models below), so rows created from here on
+    # leave this empty. A non-empty value only exists on rows written before the
+    # change, and bootstrap._seed_image_model_selection() carries it into the
+    # selection exactly once. Empty rather than a model default on purpose: that
+    # seed keys on "model_id set, selection empty", and a default here would make
+    # every untouched new row look like a legacy one on the next restart.
+    model_id = Column(String(100), default="")
+    # The models ticked in the parameter panel, in click order. Persisted so the
+    # panel reopens where it was left, and because each entry becomes its own
+    # request in a batch — two models ticked is two requests per combination,
+    # side by side. JSON for the same reason as UserBananaConfig.custom_models.
+    selected_models = Column(JSON, default=list, nullable=False)
+    # Model ids the user typed in: gateway aliases, dated snapshots, models newer
+    # than the documented list. Kept apart from the selection so an id can be
+    # unticked without being forgotten.
+    custom_models = Column(JSON, default=list, nullable=False)
     timeout = Column(Integer, default=480)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
