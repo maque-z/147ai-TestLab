@@ -16,19 +16,15 @@ export interface GptImageModel {
 
 /** Models the Images API documents, newest first.
  *
- *  Dated snapshots are listed as their own entries because a gateway that
- *  accepts the alias but not the snapshot id — or quietly maps one onto the
- *  other — is exactly what sending both side by side reveals. Anything else
- *  (gpt-image-1.5, a house alias) is typed in as a custom id and saved to the
- *  account.
+ *  Only the three the docs name. Each one's dated snapshot is deliberately not
+ *  listed as its own entry — the docs treat the alias as the model — so a
+ *  snapshot id is typed in by hand when it is wanted, which is the same route
+ *  gpt-image-1.5 and any house alias take.
  */
 export const GPT_IMAGE_MODELS: readonly GptImageModel[] = [
   { id: 'gpt-image-2.5-sunburst', note: '官方 2026-09-08 · 质量与编辑精度优先 · quality 到 max' },
   { id: 'gpt-image-2.5-flare',    note: '官方 2026-09-08 · 速度优先，延迟低约 50% · quality 到 max' },
-  { id: 'gpt-image-2',            note: '官方 2026-04-21 · quality 最高 high · 透明背景为预览' },
-  { id: 'gpt-image-2.5-sunburst-2026-09-08', note: '日期快照 · 文档称 sunburst 别名当前指向它' },
-  { id: 'gpt-image-2.5-flare-2026-09-08',    note: '日期快照 · 文档称 flare 别名当前指向它' },
-  { id: 'gpt-image-2-2026-04-21',            note: '日期快照 · gpt-image-2 别名当前指向它' },
+  { id: 'gpt-image-2',            note: '官方 · quality 最高 high · 透明背景为预览 · 有日期快照' },
 ]
 
 export const DOCUMENTED_MODEL_IDS: ReadonlySet<string> = new Set(GPT_IMAGE_MODELS.map(m => m.id))

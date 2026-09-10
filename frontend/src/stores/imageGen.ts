@@ -270,25 +270,34 @@ export const useImageGenStore = defineStore('imageGen', () => {
     }
   }
 
-  /** Tick or untick a model. The last one cannot be unticked: unlike every other
-   *  group, an empty model list is not "unset", it is a batch that cannot be
-   *  sent. Saved to the account after a short quiet period. */
+  /** Every available model is already ticked. Drives the label of the one button
+   *  that fills the group and empties it again — same arrangement as the test
+   *  panel's dimension chips. */
+  const allModelsSelected = computed(() =>
+    availableModels.value.length > 0 &&
+    matrix.models.length === availableModels.value.length,
+  )
+
+  /** Tick or untick one model.
+   *
+   *  Unlike the Gemini panel this one does let the last entry go: an empty model
+   *  group is simply a batch that cannot be sent, which blockReason says outright
+   *  and the 全选 button undoes in one click. Refusing the untick instead would
+   *  leave no way to start over from a single model. */
   function toggleModel(id: string) {
     const i = matrix.models.indexOf(id)
-    if (i >= 0) {
-      if (matrix.models.length === 1) return
-      matrix.models.splice(i, 1)
-    } else {
-      matrix.models.push(id)
-    }
+    if (i >= 0) matrix.models.splice(i, 1)
+    else matrix.models.push(id)
     schedulePersistModels()
   }
 
-  function selectAllModels() {
-    matrix.models = availableModels.value.map(m => m.id)
+  /** Fill the group, or empty it when it is already full. */
+  function toggleAllModels() {
+    matrix.models = allModelsSelected.value
+      ? []
+      : availableModels.value.map(m => m.id)
     schedulePersistModels()
   }
-
   /** Add a hand-typed id to the account and tick it. Returns the reason it was
    *  refused, or '' when added. Only what could not possibly be meant is refused
    *  — the id is sent verbatim, and an odd one is a probe like any other. */
@@ -305,15 +314,14 @@ export const useImageGenStore = defineStore('imageGen', () => {
     return ''
   }
 
-  /** Forget a hand-added id. Unticked too, and if it was the only model the
-   *  default takes its place so the batch stays sendable. */
+  /** Forget a hand-added id, unticked along with it. If it was the only model
+   *  ticked the group is left empty rather than quietly filled with a default:
+   *  which model to use next is the user's call, and blockReason is what stops
+   *  the batch until they make it. */
   function removeCustomModel(id: string) {
     config.value.custom_models = config.value.custom_models.filter(m => m !== id)
     const i = matrix.models.indexOf(id)
-    if (i >= 0) {
-      matrix.models.splice(i, 1)
-      if (!matrix.models.length) matrix.models.push(DEFAULT_MODEL)
-    }
+    if (i >= 0) matrix.models.splice(i, 1)
     schedulePersistModels()
   }
 
@@ -463,8 +471,8 @@ export const useImageGenStore = defineStore('imageGen', () => {
     stop: runner.stop,
     stopJob: runner.stopJob,
     perRequest, totalRequests, totalImages, blockReason, canRun,
-    availableModels, modelSaveError,
-    toggleModel, selectAllModels, addCustomModel, removeCustomModel,
+    availableModels, modelSaveError, allModelsSelected,
+    toggleModel, toggleAllModels, addCustomModel, removeCustomModel,
     loadConfig, updateConfig, run, generateMatrix, clearJobs,
   }
 })

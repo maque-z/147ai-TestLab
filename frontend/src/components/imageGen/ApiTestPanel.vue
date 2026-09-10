@@ -262,6 +262,9 @@ function toggleAll() {
 }
 
 const blockReason = computed(() => {
+  // The models come from the parameter panel, which this pane hides — so an
+  // empty selection there would otherwise look like a mystery refusal here.
+  if (!imageGen.matrix.models.length) return '请先在参数面板中勾选模型'
   if (!imageGen.config.api_key) return '请先在配置中填写 API Key'
   if (!store.selectedDims.length) return '请至少勾选一个检测项'
   return ''

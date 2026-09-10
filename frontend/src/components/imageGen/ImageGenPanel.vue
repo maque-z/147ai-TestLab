@@ -141,7 +141,11 @@
               class="save-err"
               :title="`选择未能保存到账号：${store.modelSaveError}`"
             >⚠ 未保存</span>
-            <button class="btn btn-xs" @click="store.selectAllModels()">全选</button>
+            <!-- Fills the group, or empties it when it is already full — the
+                 same one-button toggle the test panel's dimension chips use. -->
+            <button class="btn btn-xs" @click="store.toggleAllModels()">
+              {{ store.allModelsSelected ? '清空' : '全选' }}
+            </button>
           </div>
           <div class="chips models">
             <button
