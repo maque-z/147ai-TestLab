@@ -555,10 +555,23 @@ export function summarizeC2pa(list: (C2paProvenance | null | undefined)[]): stri
  *  for the states that name nothing. Kept as symbols for the negative cases so
  *  a card never reads as a positive finding it is not. */
 export function c2paChipLabel(p: C2paProvenance): string {
-  if (p.status === 'trusted' || p.status === 'valid') {
-    return p.vendor ? (p.vendor === 'azure' ? 'Azure' : 'OpenAI') : '未识别'
+  switch (p.status) {
+    case 'trusted':
+    case 'valid':
+      // The origin the manifest names, with a mark for whether the signing
+      // certificate could be traced to a bundled trust anchor — trusted is a
+      // stronger claim than valid and the chip should not blur the two.
+      return `${p.anchored ? '✓' : '·'}${p.vendor === 'azure' ? 'Azure'
+        : p.vendor === 'openai' ? 'OpenAI' : '未识别'}`
+    case 'invalid':
+      return '✗清单无效'
+    case 'unreadable':
+      return '?清单异常'
+    case 'not_present':
+      return '·无清单'
+    default:
+      return '·不适用'
   }
-  return p.status === 'invalid' ? '清单无效' : '无清单'
 }
 
 /** Which colour class the chip takes. Only a verified manifest gets a vendor
@@ -566,7 +579,8 @@ export function c2paChipLabel(p: C2paProvenance): string {
  *  like an Azure or OpenAI answer. */
 export function c2paChipKind(p: C2paProvenance): string {
   if (p.status === 'trusted' || p.status === 'valid') return p.vendor ?? 'unknown'
-  return p.status === 'invalid' ? 'invalid' : 'none'
+  if (p.status === 'invalid') return 'invalid'
+  return p.status === 'not_present' ? 'none' : 'neutral'
 }
 
 /** The chip's tooltip: the verdict, what it rests on, and every piece of

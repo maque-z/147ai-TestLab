@@ -138,12 +138,14 @@
                 :class="['vendor-chip', `k-${result.vendor.vendor}`]"
                 :title="result.vendor.label + '\n' + result.vendor.evidence.join('\n')"
               >{{ VENDOR_SHORT[result.vendor.vendor] }}</span>
-              <!-- Content Credentials, when the image carried a manifest. This
-                   is the cryptographic answer, so it sits right after the
-                   header-based one: where the two disagree, the disagreement is
-                   the finding and both are worth seeing. -->
+              <!-- Content Credentials, whenever the backend was able to look at
+                   the bytes. Shown for every outcome including "no manifest":
+                   a stripped image and an image that never had one look
+                   identical, so absence is a result worth reporting rather than
+                   a reason to render nothing — hiding it made this look like
+                   the check was not running at all. -->
               <span
-                v-if="result.c2pa && result.c2pa.present"
+                v-if="result.c2pa"
                 :class="['c2pa-chip', `k-${c2paChipKind(result.c2pa)}`]"
                 :title="c2paTooltip(result.c2pa)"
               >CC·{{ c2paChipLabel(result.c2pa) }}</span>
@@ -630,77 +632,12 @@ async function copySummary() {
 .c2pa-chip.k-azure   { color: #3D7CC9; background: rgba(61, 124, 201, 0.22); }
 .c2pa-chip.k-invalid { color: #C7362F; background: rgba(199, 54, 47, 0.18); }
 .c2pa-chip.k-none,
-.c2pa-chip.k-unknown { color: var(--text-muted); background: rgba(139, 147, 163, 0.14); }
+.c2pa-chip.k-unknown,
+.c2pa-chip.k-neutral { color: var(--text-muted); background: rgba(139, 147, 163, 0.14); }
 
-/* Data-kind badge: bottom-left of the thumbnail, opposite the count badge.
-   Muted for the documented b64_json case, amber for anything else. */
-.kind-badge {
-  position: absolute;
-  left: 5px;
-  bottom: 5px;
-  padding: 1px 6px;
-  border-radius: 6px;
-  background: rgba(22, 24, 29, 0.66);
-  color: #C8D0DC;
-  font-family: 'Consolas', 'Menlo', 'Monaco', monospace;
-  font-size: 9.5px;
-  font-weight: 700;
-  cursor: help;
-}
-.kind-badge.off { color: #FFD27A; background: rgba(120, 78, 0, 0.78); }
-
-/* Count badge sits over the thumbnail; the wrapper is its containing block. */
-.img-count-badge {
-  position: absolute;
-  right: 5px;
-  bottom: 5px;
-  padding: 1px 6px;
-  border-radius: 6px;
-  background: rgba(22, 24, 29, 0.78);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
-}
-
-.card-img-wrap {
-  position: relative;
-  width: 100%;
-  aspect-ratio: 1 / 1;
-  background: var(--bg);
-  box-shadow: inset 2px 2px 4px var(--shadow-dark), inset -2px -2px 4px var(--shadow-light);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-}
-
-.card-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-.card-img-ph {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.card-img-ph.loading { opacity: 0.5; }
-.card-img-ph.error   { color: #C7362F; font-size: 18px; }
-
-.card-detail {
-  padding: 4px 8px 6px;
-  font-size: 10px;
-  line-height: 1.4;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* "no manifest" is a result, not missing data: it gets its own quieter chip so
+   a column of them reads as a finding rather than as an empty cell. */
+.c2pa-chip.k-none { color: #8B93A3; background: rgba(139, 147, 163, 0.10); }
 
 /* ===== Responsive ===== */
 /* Tablet: stack terminal above results */
