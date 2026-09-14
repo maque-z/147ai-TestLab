@@ -25,6 +25,18 @@
           >{{ dataKind }}</span>
           <span v-if="verdict" class="vendor-evidence">{{ verdict.evidence.join(' · ') }}</span>
         </div>
+
+        <!-- Content Credentials. Sits below the header/body verdict rather than
+             merging with it: the two are judged from different evidence, and
+             this one is the only cryptographic claim of the pair. -->
+        <div v-if="c2pa" class="raw-c2pa" :title="c2paTooltip(c2pa)">
+          <span :class="['c2pa-status', `s-${c2pa.status}`]">{{ c2pa.status_label }}</span>
+          <span class="c2pa-line">{{ describeC2pa(c2pa) }}</span>
+          <span class="c2pa-evidence">{{ c2pa.evidence.join(' · ') }}</span>
+          <span v-if="c2pa.problems.length" class="c2pa-problems">
+            ✗ {{ c2pa.problems.join(' · ') }}
+          </span>
+        </div>
         <!-- One merged transcript: status line, every header, blank line, body.
              Reads like the wire format so it can be pasted into a report as-is. -->
         <pre class="raw-pre">{{ rawText }}</pre>
@@ -36,7 +48,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { NModal } from 'naive-ui'
-import type { UpstreamSnapshot, VendorVerdict } from '@/types'
+import type { C2paProvenance, UpstreamSnapshot, VendorVerdict } from '@/types'
+import { c2paTooltip, describeC2pa } from '@/utils/vendor'
 
 const props = defineProps<{
   show: boolean
@@ -48,6 +61,10 @@ const props = defineProps<{
   verdict?: VendorVerdict | null
   /** How the image bytes arrived (b64_json / data:URL / url→host). */
   dataKind?: string
+  /** Content Credentials read off the image bytes. Not part of the HTTP
+   *  exchange below — it is in the image, which is exactly why it is worth
+   *  showing beside the headers both can be compared against. */
+  c2pa?: C2paProvenance | null
 }>()
 const emit = defineEmits<{
   (e: 'update:show', v: boolean): void
@@ -213,6 +230,53 @@ async function copyRaw() {
   color: #8B93A3;
   word-break: break-all;
 }
+
+/* ── Content Credentials strip ── */
+.raw-c2pa {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 7px 14px;
+  background: #1E2530;
+  border-bottom: 1px solid #2E3340;
+  flex-shrink: 0;
+  cursor: help;
+}
+
+.c2pa-status {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 6px;
+}
+.c2pa-status.s-trusted { color: #4DC98C; background: rgba(77, 201, 140, 0.14); }
+.c2pa-status.s-valid   { color: #E5A43A; background: rgba(229, 164, 58, 0.14); }
+.c2pa-status.s-invalid { color: #E05D5D; background: rgba(224, 93, 93, 0.14); }
+.c2pa-status.s-not_present,
+.c2pa-status.s-unreadable,
+.c2pa-status.s-unsupported_format {
+  color: #8B93A3;
+  background: rgba(139, 147, 163, 0.12);
+}
+
+.c2pa-line {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #C8D0DC;
+}
+
+.c2pa-evidence,
+.c2pa-problems {
+  font-family: 'Consolas', 'Menlo', 'Monaco', monospace;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: #8B93A3;
+  word-break: break-all;
+  flex-basis: 100%;
+}
+.c2pa-problems { color: #E05D5D; }
 
 .raw-pre {
   margin: 0;

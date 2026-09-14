@@ -98,6 +98,15 @@ class GeneratedImage(BaseModel):
     # renders the link directly and reports the bytes as unmeasurable.
     fetch_error: Optional[str] = None
 
+    # Content Credentials: everything read off the image's C2PA manifest, and
+    # the verdict that came out of it. Kept as a loose dict rather than a
+    # mirrored model because the reader in core/c2pa.py owns the shape and the
+    # frontend reads it by key -- two hand-written copies of thirty fields
+    # would drift the first time one was added. None means there were no bytes
+    # to inspect at all; a present dict with status "not_present" is the
+    # different, meaningful case of an image that has no manifest.
+    c2pa: Optional[dict] = None
+
 class UpstreamSnapshot(BaseModel):
     """One upstream HTTP exchange, verbatim, for the observation modal.
 

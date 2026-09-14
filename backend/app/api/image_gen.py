@@ -17,6 +17,7 @@ from ..core.deps import UpstreamConfig, get_current_user, get_image_config
 from ..core.streaming import heartbeat_response
 # Byte-level inspection lives in core/ because the Gemini endpoint needs the same
 # checks: both upstreams declare a format that can disagree with the bytes sent.
+from ..core.c2pa import inspect as inspect_c2pa
 from ..core.imaging import (
     b64_byte_size,
     detect_format,
@@ -322,6 +323,20 @@ async def _build_image(item: dict, timeout: float) -> GeneratedImage:
         except Exception:
             real_format = None
 
+    # The Content Credentials manifest, if the upstream left one in the bytes.
+    # This is the only check in the whole tool that is not a heuristic: it
+    # verifies a signature over a claim naming Microsoft or OpenAI, which a
+    # relay cannot copy without the private key. Reported per image, and None
+    # when there were no bytes to look at.
+    provenance = None
+    if raw is not None:
+        provenance = inspect_c2pa(raw)
+    elif b64_out:
+        try:
+            provenance = inspect_c2pa(base64.b64decode(b64_out))
+        except Exception:
+            provenance = None
+
     revised = item.get("revised_prompt")
     return GeneratedImage(
         b64_json=b64_out,
@@ -335,6 +350,7 @@ async def _build_image(item: dict, timeout: float) -> GeneratedImage:
         data_field=field,
         source_url=source_url,
         fetch_error=fetch_error,
+        c2pa=provenance,
     )
 
 

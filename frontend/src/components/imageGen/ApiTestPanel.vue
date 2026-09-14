@@ -138,6 +138,15 @@
                 :class="['vendor-chip', `k-${result.vendor.vendor}`]"
                 :title="result.vendor.label + '\n' + result.vendor.evidence.join('\n')"
               >{{ VENDOR_SHORT[result.vendor.vendor] }}</span>
+              <!-- Content Credentials, when the image carried a manifest. This
+                   is the cryptographic answer, so it sits right after the
+                   header-based one: where the two disagree, the disagreement is
+                   the finding and both are worth seeing. -->
+              <span
+                v-if="result.c2pa && result.c2pa.present"
+                :class="['c2pa-chip', `k-${c2paChipKind(result.c2pa)}`]"
+                :title="c2paTooltip(result.c2pa)"
+              >CC·{{ c2paChipLabel(result.c2pa) }}</span>
               <!-- Raw exchange viewer. Present on errors too — the refusal
                    probes are only readable through this. -->
               <button
@@ -198,6 +207,7 @@
       :snapshot="rawResult?.upstream ?? null"
       :verdict="rawResult?.vendor ?? null"
       :data-kind="rawResult?.dataKind ? describeDataKind(rawResult) : ''"
+      :c2pa="rawResult?.c2pa ?? null"
     />
   </div>
 </template>
@@ -208,7 +218,10 @@ import { NSpin } from 'naive-ui'
 import { useApiTestStore, TEST_CASE_COUNT, CONCURRENCY, DIMENSION_OPTIONS } from '@/stores/apiTest'
 import { useImageGenStore } from '@/stores/imageGen'
 import RawResponseViewer from './RawResponseViewer.vue'
-import { VENDOR_SHORT, DATA_KIND_LABEL, describeDataKind } from '@/utils/vendor'
+import {
+  VENDOR_SHORT, DATA_KIND_LABEL, describeDataKind,
+  c2paChipLabel, c2paChipKind, c2paTooltip,
+} from '@/utils/vendor'
 import type { TestResult } from '@/types'
 
 const store     = useApiTestStore()
@@ -599,6 +612,25 @@ async function copySummary() {
 .vendor-chip.k-azure   { color: #3D7CC9; background: rgba(61, 124, 201, 0.14); }
 .vendor-chip.k-reverse { color: #B8791C; background: rgba(184, 121, 28, 0.16); }
 .vendor-chip.k-unknown { color: var(--text-muted); background: rgba(139, 147, 163, 0.14); }
+
+/* Content Credentials chip. Coloured by which origin the signature names —
+   the one signal on the card that a relay cannot fake — and neutral when there
+   is no manifest, so a stripped image never reads as a finding. */
+.c2pa-chip {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  padding: 0 5px;
+  border-radius: 5px;
+  white-space: nowrap;
+  cursor: help;
+}
+.c2pa-chip.k-openai  { color: #2E9B5E; background: rgba(46, 155, 94, 0.22); }
+.c2pa-chip.k-azure   { color: #3D7CC9; background: rgba(61, 124, 201, 0.22); }
+.c2pa-chip.k-invalid { color: #C7362F; background: rgba(199, 54, 47, 0.18); }
+.c2pa-chip.k-none,
+.c2pa-chip.k-unknown { color: var(--text-muted); background: rgba(139, 147, 163, 0.14); }
 
 /* Data-kind badge: bottom-left of the thumbnail, opposite the count badge.
    Muted for the documented b64_json case, amber for anything else. */

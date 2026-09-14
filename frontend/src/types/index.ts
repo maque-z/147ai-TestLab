@@ -93,6 +93,86 @@ export interface GeneratedImage {
   source_url?: string
   /** Why the link could not be downloaded, when it could not. */
   fetch_error?: string
+  /** Content Credentials read off the bytes. See C2paProvenance. */
+  c2pa?: C2paProvenance
+}
+
+/** How a C2PA manifest held up. `trusted` and `valid` are different claims:
+ *  both mean the signature verifies, but only `trusted` means the signing
+ *  certificate chains to an anchor in the bundled trust snapshot. `not_present`
+ *  says nothing about the image — re-encoding strips a manifest — and
+ *  `unsupported_format` means the container cannot carry one at all. */
+export type C2paStatus =
+  | 'trusted' | 'valid' | 'invalid' | 'not_present' | 'unreadable' | 'unsupported_format'
+
+/** One certificate in the signing chain, leaf first. */
+export interface C2paCert {
+  subject: string
+  issuer: string
+  not_before: string
+  not_after: string
+  self_signed: boolean
+}
+
+/** What the c2pa.hash.data assertion said. This is the assertion that ties the
+ *  image's bytes to the claim, so it is the difference between "the signature
+ *  is valid" and "this image is the one that was signed". */
+export interface C2paFileHash {
+  present: boolean
+  algorithm?: string
+  exclusions: { start?: number; length?: number }[]
+  /** Do the exclusions cover exactly the manifest's own bytes? */
+  matches_carrier?: boolean
+  /** Does SHA-256 of the file match what the generator recorded? */
+  matches_file?: boolean
+  detail: string
+}
+
+/** One manifest read off one image. The fields are the reader's own
+ *  (backend/app/core/c2pa.py) rather than a mirrored model, so they stay in
+ *  step with what it actually measures. */
+export interface C2paProvenance {
+  status: C2paStatus
+  status_label: string
+  /** How the manifest was carried: png.caBX / jpeg.APP11 / webp.C2PA. */
+  carrier?: string
+  /** Whether a manifest was found at all. */
+  present: boolean
+  /** claim_generator_info[0].name — "Azure OpenAI ImageGen" or
+   *  "OpenAI Media Service API" for the two origins this tool distinguishes. */
+  generator?: string
+  generator_version?: string
+  claim_format?: string
+  title?: string
+  actions: { action?: string; when?: string; software_agent?: string; digital_source_type?: string }[]
+  software_agent?: string
+  digital_source_type?: string
+  /** The signing certificate's subject and organization. */
+  subject?: string
+  subject_org?: string
+  issuer?: string
+  chain: C2paCert[]
+  /** Whether the chain reaches an anchor in the bundled trust snapshot. */
+  anchored: boolean
+  anchor_subject?: string
+  anchor_source?: string
+  algorithm?: string
+  /** Did the COSE signature verify against the leaf certificate? */
+  signature_ok?: boolean
+  signed_at?: string
+  timestamped: boolean
+  hash_data?: C2paFileHash
+  /** A second, non-cryptographic signal: Microsoft's invisible watermark. */
+  watermark?: string
+  /** Which origin the manifest names, judged from the generator string first
+   *  and the certificate subject when the two disagree. */
+  vendor?: 'openai' | 'azure'
+  vendor_label?: string
+  /** Why that verdict, strongest first — the same list the card tooltip shows. */
+  evidence: string[]
+  problems: string[]
+  /** Which trust-anchor snapshot the anchoring was judged against. */
+  anchor_set: string
 }
 
 /** Who ultimately produced a response. `reverse` is a Codex / ChatGPT-web
@@ -335,6 +415,12 @@ export interface TestResult {
    *  the card chip, the raw-response modal and the report quote the same
    *  evidence. */
   vendor?: VendorVerdict
+  /** Content Credentials read off the returned image. This is the strongest
+   *  evidence there is and it outranks the header/body heuristics above: a
+   *  verifying signature names Microsoft or OpenAI in a way a relay cannot
+   *  forge. Kept alongside `vendor` rather than replacing it, so a disagreement
+   *  between the two is visible instead of silently resolved. */
+  c2pa?: C2paProvenance
 }
 
 export interface TestLogEntry {

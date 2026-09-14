@@ -1,4 +1,6 @@
-import type { ImageDataKind, UpstreamSnapshot, VendorKind, VendorVerdict } from '@/types'
+import type {
+  C2paProvenance, ImageDataKind, UpstreamSnapshot, VendorKind, VendorVerdict,
+} from '@/types'
 
 export type { VendorKind, VendorVerdict }
 
@@ -443,8 +445,7 @@ export function describeDataKind(
  *  expected and a split is itself a finding — a relay balancing across
  *  different origins mid-suite.
  */
-export function aggregateVendor(verdicts: (VendorVerdict | null | undefined)[]): string {
-  const done = verdicts.filter((v): v is VendorVerdict => !!v)
+export function aggregateVendor(verdicts: (VendorVerdict | null | undefined)[]): string {  const done = verdicts.filter((v): v is VendorVerdict => !!v)
   if (!done.length) return '无原始响应可判定'
 
   const counts = new Map<VendorKind, VendorVerdict[]>()
@@ -479,4 +480,102 @@ export function aggregateVendor(verdicts: (VendorVerdict | null | undefined)[]):
   const parts = decisive.map(k => `${VENDOR_LABEL[k]} ${counts.get(k)!.length} 次`)
   if (unknownCount) parts.push(`无法判定 ${unknownCount} 次`)
   return `⚠ 混合来源 — ${parts.join(' · ')}`
+}
+
+// ─── Content Credentials ────────────────────────────────────────────────────
+// The one check here that is not a heuristic. A C2PA manifest carries an X.509
+// chain and a COSE signature over a claim naming the producer, so a relay
+// cannot fabricate one without a private key that Microsoft or OpenAI holds —
+// where every signal above can be stripped or faked by whoever answers the
+// configured baseurl.
+
+/** How much the manifest actually settles, in the report's own words. */
+export function describeC2pa(p: C2paProvenance | undefined): string {
+  if (!p) return '字节不可得，未检测'
+  switch (p.status) {
+    case 'trusted':
+      return `受信任 · ${p.subject_org ?? p.subject ?? '?'}`
+    case 'valid':
+      return `签名有效但未锚定 · ${p.subject_org ?? p.subject ?? '?'}`
+    case 'invalid':
+      return `无效 · ${p.problems[0] ?? '签名或内容不符'}`
+    case 'not_present':
+      return '无清单（可能是被剥离，也可能从未有）'
+    case 'unreadable':
+      return `清单无法解析 · ${p.problems[0] ?? ''}`
+    default:
+      return '该格式不携带 C2PA 清单'
+  }
+}
+
+/** One line for the report: which origin the manifests named, across a run.
+ *
+ *  A run's images all come from the same baseurl, so a split here is a real
+ *  finding — a gateway routing to two different origins under one address.
+ *  Only manifests whose signature verified are counted; an invalid one is
+ *  named separately rather than folded into the tally, because an unverifiable
+ *  manifest is not evidence in either direction.
+ */
+export function summarizeC2pa(list: (C2paProvenance | null | undefined)[]): string {
+  const found = list.filter((p): p is C2paProvenance => !!p)
+  if (!found.length) return '字节不可得，未检测'
+
+  const verified = found.filter(p => p.status === 'trusted' || p.status === 'valid')
+  const invalid = found.filter(p => p.status === 'invalid')
+  const absent = found.filter(p => p.status === 'not_present')
+  const other = found.length - verified.length - invalid.length - absent.length
+
+  if (!verified.length) {
+    const bits: string[] = []
+    if (invalid.length) bits.push(`${invalid.length} 次签名无效（内容被改过或证书链断裂）`)
+    if (absent.length) bits.push(`${absent.length} 次无清单`)
+    if (other) bits.push(`${other} 次不可解析`)
+    return `未检出可验证的 Content Credentials（${bits.join(' · ') || '无图像'}）`
+  }
+
+  const byVendor = new Map<string, number>()
+  for (const p of verified) {
+    const key = p.vendor ? (p.vendor_label ?? p.vendor) : '未识别签发方'
+    byVendor.set(key, (byVendor.get(key) ?? 0) + 1)
+  }
+  const parts = Array.from(byVendor.entries()).map(([k, n]) => `${k} ${n} 次`)
+  const anchored = verified.filter(p => p.anchored).length
+  const tail: string[] = [`${verified.length}/${found.length} 张图带可验证清单`]
+  tail.push(anchored === verified.length && anchored > 0
+    ? '全部锚定于随附信任锚点'
+    : `${anchored} 次锚定于随附信任锚点`)
+  if (invalid.length) tail.push(`⚠ ${invalid.length} 次签名无效`)
+  if (absent.length) tail.push(`${absent.length} 次无清单`)
+
+  const mixed = byVendor.size > 1 ? '⚠ 混合签发方 — ' : ''
+  return `${mixed}${parts.join(' · ')}（${tail.join(' · ')}）`
+}
+
+/** The short text for a card chip: the origin the manifest named, or a symbol
+ *  for the states that name nothing. Kept as symbols for the negative cases so
+ *  a card never reads as a positive finding it is not. */
+export function c2paChipLabel(p: C2paProvenance): string {
+  if (p.status === 'trusted' || p.status === 'valid') {
+    return p.vendor ? (p.vendor === 'azure' ? 'Azure' : 'OpenAI') : '未识别'
+  }
+  return p.status === 'invalid' ? '清单无效' : '无清单'
+}
+
+/** Which colour class the chip takes. Only a verified manifest gets a vendor
+ *  colour; everything else is neutral or red, so a stripped image never looks
+ *  like an Azure or OpenAI answer. */
+export function c2paChipKind(p: C2paProvenance): string {
+  if (p.status === 'trusted' || p.status === 'valid') return p.vendor ?? 'unknown'
+  return p.status === 'invalid' ? 'invalid' : 'none'
+}
+
+/** The chip's tooltip: the verdict, what it rests on, and every piece of
+ *  evidence behind it. */
+export function c2paTooltip(p: C2paProvenance): string {
+  const lines = [`Content Credentials: ${p.status_label}`]
+  if (p.carrier) lines.push(`载体: ${p.carrier}`)
+  lines.push(`随附锚点: ${p.anchor_set}`)
+  if (p.problems.length) lines.push('', '问题:', ...p.problems.map(x => `  ✗ ${x}`))
+  if (p.evidence.length) lines.push('', '依据:', ...p.evidence.map(x => `  · ${x}`))
+  return lines.join('\n')
 }

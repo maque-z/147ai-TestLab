@@ -7,7 +7,9 @@ import type {
 import * as imageGenApi from '@/api/imageGen'
 import { useImageGenStore } from '@/stores/imageGen'
 import { b64ToBlobUrl, runPool, sampleAlpha } from '@/utils/batch'
-import { detectVendor, aggregateVendor, describeDataKind } from '@/utils/vendor'
+import {
+  detectVendor, aggregateVendor, describeDataKind, describeC2pa, summarizeC2pa,
+} from '@/utils/vendor'
 import { DEFAULT_PROMPT } from '@/utils/defaultPrompt'
 import {
   DEFAULT_MODEL, EXTENDED_QUALITY, QUALITY_TIERS, supportsExtendedQuality,
@@ -539,6 +541,10 @@ export const useApiTestStore = defineStore('apiTest', () => {
             dataField:     imgData?.data_field ?? undefined,
             sourceUrl:     imgData?.source_url ?? undefined,
             fetchError:    imgData?.fetch_error ?? undefined,
+            // Read off the image bytes server-side. The first image is the one
+            // the card renders and the one the other measurements describe, so
+            // it is the one whose manifest is reported.
+            c2pa:          imgData?.c2pa,
             vendor,
           } as Partial<TestResult>)
 
@@ -598,6 +604,12 @@ export const useApiTestStore = defineStore('apiTest', () => {
     // a split is itself a finding (a gateway balancing across upstreams).
     addLog('info', `返回数据形式: ${dataKindLine()}`)
     addLog('info', `来源判定: ${vendorLine()}`)
+    // The C2PA line, when anything was checked at all. It is logged after the
+    // header verdict and never in place of it: the two answer different
+    // questions, and where they disagree the disagreement is the finding.
+    if (results.value.some(r => r.c2pa)) {
+      addLog('info', `Content Credentials: ${c2paLine()}`)
+    }
 
     const elapsed = Math.round(performance.now() - t0)
     addLog('rule', '')
@@ -672,6 +684,42 @@ export const useApiTestStore = defineStore('apiTest', () => {
   /** One line naming the vendor behind the gateway, from all raw exchanges. */
   function vendorLine(): string {
     return aggregateVendor(results.value.map(r => r.vendor ?? null))
+  }
+
+  /** One line on the Content Credentials found across the run's images. */
+  function c2paLine(): string {
+    return summarizeC2pa(results.value.map(r => r.c2pa ?? null))
+  }
+
+  /** The per-manifest detail under the C2PA section: one line per distinct
+   *  answer, so a run where one model is signed and another is not says so
+   *  rather than averaging into a single line. */
+  function c2paDetailLines(): string[] {
+    const out: string[] = []
+    const seen = new Map<string, number>()
+    for (const r of results.value) {
+      if (!r.c2pa) continue
+      const key = `${r.model} · ${describeC2pa(r.c2pa)}`
+      seen.set(key, (seen.get(key) ?? 0) + 1)
+    }
+    for (const [key, n] of seen) out.push(`  · ${key}${n > 1 ? `（${n} 次）` : ''}`)
+
+    // The certificate chain and the hash assertion are what the verdict rests
+    // on, so the strongest manifest in the run is quoted in full — a reader
+    // checking the claim by hand needs the exact subjects.
+    const best = results.value.find(r => r.c2pa?.status === 'trusted')
+      ?? results.value.find(r => r.c2pa?.status === 'valid')
+    if (best?.c2pa) {
+      const p = best.c2pa
+      out.push(`  · 签发证书: ${p.subject ?? '?'}`)
+      if (p.chain.length > 1) {
+        out.push(`  · 完整证书链: ${p.chain.map(c => c.subject).join(' → ')}`)
+      }
+      if (p.anchor_subject) out.push(`  · 信任锚点: ${p.anchor_subject}`)
+      if (p.hash_data) out.push(`  · ${p.hash_data.detail}`)
+    }
+    if (out.length) out.push(`  · 判定依据: ${best?.c2pa?.anchor_set ?? ''}`)
+    return out
   }
 
   /** One line on how the image bytes arrived across the run. b64_json is the
@@ -805,6 +853,12 @@ export const useApiTestStore = defineStore('apiTest', () => {
     // vendor — judged from the raw exchanges, evidence quoted
     lines.push('')
     lines.push(`■ 来源判定  ${vendorLine()}`)
+
+    // Content Credentials — the one cryptographic answer, quoted with the
+    // certificate it came from so the reader can see what it rests on.
+    lines.push('')
+    lines.push(`■ Content Credentials  ${c2paLine()}`)
+    for (const p of c2paDetailLines()) lines.push(p)
 
     return lines.join('\n')
   }
