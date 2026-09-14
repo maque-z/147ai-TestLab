@@ -639,6 +639,85 @@ async function copySummary() {
    a column of them reads as a finding rather than as an empty cell. */
 .c2pa-chip.k-none { color: #8B93A3; background: rgba(139, 147, 163, 0.10); }
 
+/* ── Badges over the thumbnail ──
+   Both are absolutely positioned, so the wrapper is their containing block. */
+/* How the bytes arrived. The reference fixes GPT image models to b64_json, so
+   url / data:URL here is a finding about the gateway — which is why anything
+   other than the documented shape is amber rather than merely different. */
+.kind-badge {
+  position: absolute;
+  left: 5px;
+  bottom: 5px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(22, 24, 29, 0.66);
+  color: #C8D0DC;
+  font-family: 'Consolas', 'Menlo', 'Monaco', monospace;
+  font-size: 9.5px;
+  font-weight: 700;
+  cursor: help;
+}
+.kind-badge.off { color: #FFD27A; background: rgba(120, 78, 0, 0.78); }
+
+.img-count-badge {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(22, 24, 29, 0.78);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* ── Card image ──
+   A fixed 1:1 frame with a soft inset. `contain`, not `cover`: the aspect
+   ratios under test run from 1024x1024 to 3840x2160 and to 1024x1536 portrait,
+   and a cover-crop silently hides whichever part of the picture falls outside
+   the square — which is exactly the shape difference the size probes exist to
+   show. Letterboxing is the honest rendering. */
+.card-img-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background: var(--bg);
+  box-shadow: inset 2px 2px 4px var(--shadow-dark), inset -2px -2px 4px var(--shadow-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.card-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.card-img-ph {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.card-img-ph.loading { opacity: 0.5; }
+.card-img-ph.error   { color: #C7362F; font-size: 18px; }
+
+.card-detail {
+  padding: 4px 8px 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+
 /* ===== Responsive ===== */
 /* Tablet: stack terminal above results */
 @media (max-width: 900px) {
